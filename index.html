@@ -145,7 +145,9 @@ h1 i{color:var(--red)}
 
 /* Divider */
 .divider{height:1px;background:var(--border);position:relative;margin:0 48px}
-.divider span{position:absolute;left:50%;transform:translateX(-50%) translateY(-50%);background:var(--bg);padding:0 24px;font-size:9px;letter-spacing:4px;font-weight:600;color:transparent;background-clip:text;-webkit-background-clip:text;background-image:linear-gradient(90deg,var(--muted),var(--dim),var(--red),var(--dim),var(--muted));background-size:300% 100%;animation:dividerShimmer 6s ease-in-out infinite}
+.divider span{position:absolute;left:50%;transform:translateX(-50%) translateY(-50%);padding:0 24px;font-size:9px;letter-spacing:4px;font-weight:600}
+.divider span::before{content:'';position:absolute;inset:0;background:var(--bg);z-index:0}
+.divider span b{position:relative;z-index:1;font-weight:600;color:transparent;-webkit-background-clip:text;background-clip:text;background-image:linear-gradient(90deg,var(--red),var(--amber),var(--red));background-size:200% 100%;animation:shimmer 4s ease-in-out infinite}
 
 .what{padding:120px 48px;display:grid;grid-template-columns:300px 1fr;gap:80px}
 .what-sticky{position:sticky;top:120px;align-self:start}
@@ -253,9 +255,7 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
   background-clip:text;
   animation:shimmer 4s ease-in-out infinite;
 }
-@keyframes shimmer{0%{background-position:100% 0}50%{background-position:0% 0}100%{background-position:100% 0}}
-@keyframes dividerShimmer{0%{background-position:100% 0}50%{background-position:0% 0}100%{background-position:100% 0}}
-.mega-sub{
+@keyframes shimmer{0%{background-position:100% 0}50%{background-position:0% 0}100%{background-position:100% 0}}.mega-sub{
   font-size:12px;letter-spacing:6px;color:var(--muted);
   font-weight:600;margin-top:12px;
 }
@@ -434,7 +434,7 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
   </div>
 </section>
 
-<div class="divider"><span>ONE PLATFORM · INFINITE IDENTITIES</span></div>
+<div class="divider"><span><b>ONE PLATFORM · INFINITE IDENTITIES</b></span></div>
 
 <section class="what" id="what">
   <div class="what-sticky sr">
