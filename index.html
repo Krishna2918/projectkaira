@@ -255,7 +255,15 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
   background-clip:text;
   animation:shimmer 4s ease-in-out infinite;
 }
-@keyframes shimmer{0%{background-position:100% 0}50%{background-position:0% 0}100%{background-position:100% 0}}.mega-sub{
+@keyframes shimmer{0%{background-position:100% 0}50%{background-position:0% 0}100%{background-position:100% 0}}.mega-full{
+  font-size:13px;letter-spacing:3px;color:var(--dim);font-weight:400;
+  margin-top:8px;opacity:0;transform:translateY(-6px);
+  transition:opacity 0.4s,transform 0.4s;pointer-events:none;height:0;overflow:hidden;
+}
+.mega-full span{color:var(--red);font-weight:600}
+.mega-full.show,.mega-text:hover+.mega-full{opacity:1;transform:translateY(0);height:auto;padding:4px 0}
+.mega-text{cursor:pointer}
+.mega-sub{
   font-size:12px;letter-spacing:6px;color:var(--muted);
   font-weight:600;margin-top:12px;
 }
@@ -341,7 +349,8 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
   </div>
 
   <div class="hero-mega">
-    <div class="mega-text" id="megaText">K<span class="dot">.</span>A<span class="dot">.</span>I<span class="dot">.</span>R<span class="dot">.</span>A<span class="dot">.</span></div>
+    <div class="mega-text" id="megaText" onclick="this.parentElement.querySelector('.mega-full').classList.toggle('show')">K<span class="dot">.</span>A<span class="dot">.</span>I<span class="dot">.</span>R<span class="dot">.</span>A<span class="dot">.</span></div>
+    <div class="mega-full" id="megaFull"><span>K</span>inetic <span>A</span>rtificial <span>I</span>ntelligence <span>R</span>etrieval <span>A</span>gent</div>
     <div class="mega-sub">PROJECT KAIRA</div>
     <div style="font-size:11px;letter-spacing:3px;color:var(--dim);margin-top:20px;font-weight:500">LAUNCHING SEPTEMBER 15, 2026</div>
     <div class="countdown" id="countdown" style="margin:16px 0 0">
