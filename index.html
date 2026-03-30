@@ -511,11 +511,12 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 
 <section class="beta" id="beta">
   <h2 class="sr">Be first to meet<br><i>your</i> AI.</h2>
-  <p class="sr" style="font-size:14px;color:var(--dim);margin-bottom:36px">Get notified at beta and again at launch. September 15, 2026.</p>
-  <div class="sr" style="margin-bottom:16px">
-    <a href="mailto:hello@projectkaira.ca?subject=Project%20Kaira%20-%20Early%20Access&body=I%20want%20early%20access%20to%20Project%20Kaira!" class="btn-fill" style="display:inline-block;text-decoration:none;padding:14px 32px;font-size:12px;letter-spacing:1.5px">REQUEST EARLY ACCESS</a>
-  </div>
-  <p class="beta-note sr">or email us directly at <a href="mailto:hello@projectkaira.ca" style="color:var(--red);text-decoration:none">hello@projectkaira.ca</a></p>
+  <p class="sr" style="font-size:14px;color:var(--dim);margin-bottom:36px">Join the waitlist. Be notified at beta (May 2026) and at launch.</p>
+  <form id="waitlistForm" class="beta-form sr" onsubmit="handleWaitlist(event)">
+    <input type="email" id="waitlistEmail" class="beta-input" placeholder="your@email.com" required autocomplete="email">
+    <button type="submit" class="beta-btn" id="waitlistBtn">JOIN WAITLIST</button>
+  </form>
+  <p class="beta-note sr" id="betaNote">No spam. Just your AI, when it's ready.</p>
 </section>
 
 <footer>
@@ -669,6 +670,40 @@ function updateCountdown(){
 }
 updateCountdown();
 setInterval(updateCountdown,1000);
+
+// Waitlist form handler
+async function handleWaitlist(e) {
+  e.preventDefault();
+  const email = document.getElementById('waitlistEmail').value.trim().toLowerCase();
+  const btn = document.getElementById('waitlistBtn');
+  const form = document.getElementById('waitlistForm');
+  const note = document.getElementById('betaNote');
+  if (!email || !email.includes('@')) return;
+  btn.disabled = true;
+  btn.textContent = 'JOINING...';
+  let saved = false;
+  // Try local server first (when running waitlist_server.py locally)
+  try {
+    const res = await fetch('/waitlist', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, ts: new Date().toISOString(), source: 'landing_page'})
+    });
+    if (res.ok) { saved = true; }
+  } catch(_) {}
+  // Fallback: persist in localStorage
+  if (!saved) {
+    try {
+      const wl = JSON.parse(localStorage.getItem('kaira_waitlist') || '[]');
+      if (!wl.find(x => x.email === email)) wl.push({email, ts: new Date().toISOString()});
+      localStorage.setItem('kaira_waitlist', JSON.stringify(wl));
+    } catch(_) {}
+  }
+  // Show success
+  form.innerHTML = '<p style="color:var(--teal);font-size:14px;letter-spacing:2px;font-weight:600">YOU\'RE ON THE LIST ✓</p>';
+  note.textContent = email + ' — we\'ll reach you when beta opens.';
+  note.style.opacity = '1'; note.style.transform = 'translateY(0)';
+}
 </script>
 </body>
 </html>
