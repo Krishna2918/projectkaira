@@ -247,11 +247,11 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 .sr.v{opacity:1;transform:translateY(0)}
 
 /* Login Modal */
-.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);z-index:200;opacity:0;pointer-events:none;transition:opacity 0.25s}
-.modal-backdrop.open{opacity:1;pointer-events:auto}
-.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-52%);width:min(420px,92vw);background:#0d0d0d;border:1px solid var(--border);z-index:201;padding:48px 40px 40px;opacity:0;transition:opacity 0.25s,transform 0.25s}
-.modal-backdrop.open .modal{opacity:1;transform:translate(-50%,-50%)}
-.modal-close{position:absolute;top:16px;right:16px;background:none;border:none;color:var(--dim);cursor:pointer;padding:4px;line-height:1;font-size:18px;transition:color 0.2s}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-backdrop.open{display:flex}
+.modal{background:#0d0d0d;border:1px solid var(--border);width:100%;max-width:420px;padding:48px 40px 40px;position:relative;animation:modalIn 0.2s ease}
+@keyframes modalIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+.modal-close{position:absolute;top:16px;right:16px;background:none;border:none;color:var(--dim);cursor:pointer;padding:4px;line-height:1;font-size:20px;transition:color 0.2s}
 .modal-close:hover{color:var(--text)}
 .modal-eyebrow{font-size:9px;letter-spacing:4px;color:var(--red);font-weight:600;margin-bottom:12px}
 .modal h2{font-family:'DM Serif Display',serif;font-size:28px;font-weight:400;margin-bottom:6px}
@@ -259,7 +259,7 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 .modal-field{margin-bottom:16px}
 .modal-label{font-size:10px;letter-spacing:2px;color:var(--dim);font-weight:600;display:block;margin-bottom:8px}
 .modal-input{width:100%;padding:12px 14px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-family:inherit;outline:none;transition:border-color 0.2s}
-.modal-input:focus{border-color:#333}
+.modal-input:focus{border-color:#444}
 .modal-input::placeholder{color:var(--muted)}
 .modal-actions{margin-top:24px;display:flex;flex-direction:column;gap:10px}
 .modal-btn-primary{width:100%;padding:13px;background:var(--red);border:none;color:#fff;font-size:11px;letter-spacing:2px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.2s}
@@ -621,7 +621,7 @@ function closeDrawer(){
   document.getElementById('drawerOverlay').classList.remove('open');
   document.body.style.overflow='';
 }
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer()});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeDrawer();closeLogin();}});
 
 // Mega text entrance
 setTimeout(()=>{
@@ -805,26 +805,24 @@ async function handleWaitlist(e) {
 
 function openLogin(){
   closeDrawer();
-  document.getElementById('loginBackdrop').classList.add('open');
+  var bd=document.getElementById('loginBackdrop');
+  bd.classList.add('open');
   document.body.style.overflow='hidden';
-  setTimeout(()=>document.getElementById('loginEmail').focus(),200);
+  document.getElementById('loginEmail').focus();
 }
 function closeLogin(){
   document.getElementById('loginBackdrop').classList.remove('open');
   document.body.style.overflow='';
 }
-document.addEventListener('keydown',e=>{
-  if(e.key==='Escape') closeLogin();
-});
 function handleLogin(e){
   e.preventDefault();
-  const btn=document.getElementById('loginBtn');
+  var btn=document.getElementById('loginBtn');
   btn.textContent='SIGNING IN...';
   btn.disabled=true;
-  // Placeholder — will wire to auth when backend is ready
-  setTimeout(()=>{
-    btn.textContent='COMING SOON ✓';
+  setTimeout(function(){
+    btn.textContent='COMING SOON \u2713';
     btn.style.background='var(--teal)';
+    btn.disabled=false;
   },1200);
 }
 </script>
