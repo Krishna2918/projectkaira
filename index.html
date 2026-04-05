@@ -246,6 +246,33 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 .sr{opacity:0;transform:translateY(24px);transition:opacity 0.7s,transform 0.7s}
 .sr.v{opacity:1;transform:translateY(0)}
 
+/* Login Modal */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);z-index:200;opacity:0;pointer-events:none;transition:opacity 0.25s}
+.modal-backdrop.open{opacity:1;pointer-events:auto}
+.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-52%);width:min(420px,92vw);background:#0d0d0d;border:1px solid var(--border);z-index:201;padding:48px 40px 40px;opacity:0;transition:opacity 0.25s,transform 0.25s}
+.modal-backdrop.open .modal{opacity:1;transform:translate(-50%,-50%)}
+.modal-close{position:absolute;top:16px;right:16px;background:none;border:none;color:var(--dim);cursor:pointer;padding:4px;line-height:1;font-size:18px;transition:color 0.2s}
+.modal-close:hover{color:var(--text)}
+.modal-eyebrow{font-size:9px;letter-spacing:4px;color:var(--red);font-weight:600;margin-bottom:12px}
+.modal h2{font-family:'DM Serif Display',serif;font-size:28px;font-weight:400;margin-bottom:6px}
+.modal-sub{font-size:12px;color:var(--dim);margin-bottom:32px;line-height:1.5}
+.modal-field{margin-bottom:16px}
+.modal-label{font-size:10px;letter-spacing:2px;color:var(--dim);font-weight:600;display:block;margin-bottom:8px}
+.modal-input{width:100%;padding:12px 14px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-family:inherit;outline:none;transition:border-color 0.2s}
+.modal-input:focus{border-color:#333}
+.modal-input::placeholder{color:var(--muted)}
+.modal-actions{margin-top:24px;display:flex;flex-direction:column;gap:10px}
+.modal-btn-primary{width:100%;padding:13px;background:var(--red);border:none;color:#fff;font-size:11px;letter-spacing:2px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.2s}
+.modal-btn-primary:hover{background:#b71c1c}
+.modal-divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:10px;letter-spacing:1px}
+.modal-divider::before,.modal-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.modal-btn-google{width:100%;padding:12px;background:none;border:1px solid var(--border);color:var(--dim);font-size:11px;letter-spacing:1.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:10px}
+.modal-btn-google:hover{border-color:#444;color:var(--text)}
+.modal-footer{margin-top:24px;text-align:center;font-size:11px;color:var(--muted)}
+.modal-footer a{color:var(--dim);text-decoration:none;transition:color 0.2s}
+.modal-footer a:hover{color:var(--text)}
+.modal-note{font-size:10px;color:var(--muted);text-align:center;margin-top:20px;padding-top:20px;border-top:1px solid var(--border)}
+
 .hero-mega{
   width:100%;
   text-align:center;
@@ -376,7 +403,7 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
     EARLY ACCESS
   </a>
   <div class="drawer-divider"></div>
-  <button class="drawer-item drawer-login" onclick="closeDrawer()">
+  <button class="drawer-item drawer-login" onclick="openLogin()">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 8H2m0 0l3-3M2 8l3 3"/><path d="M7 4V3a1 1 0 011-1h5a1 1 0 011 1v10a1 1 0 01-1 1H8a1 1 0 01-1-1v-1"/></svg>
     LOG IN
   </button>
@@ -775,6 +802,64 @@ async function handleWaitlist(e) {
   note.textContent = email + ' — we\'ll reach you when beta opens.';
   note.style.opacity = '1'; note.style.transform = 'translateY(0)';
 }
+
+function openLogin(){
+  closeDrawer();
+  document.getElementById('loginBackdrop').classList.add('open');
+  document.body.style.overflow='hidden';
+  setTimeout(()=>document.getElementById('loginEmail').focus(),200);
+}
+function closeLogin(){
+  document.getElementById('loginBackdrop').classList.remove('open');
+  document.body.style.overflow='';
+}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape') closeLogin();
+});
+function handleLogin(e){
+  e.preventDefault();
+  const btn=document.getElementById('loginBtn');
+  btn.textContent='SIGNING IN...';
+  btn.disabled=true;
+  // Placeholder — will wire to auth when backend is ready
+  setTimeout(()=>{
+    btn.textContent='COMING SOON ✓';
+    btn.style.background='var(--teal)';
+  },1200);
+}
 </script>
+
+<!-- Login Modal -->
+<div class="modal-backdrop" id="loginBackdrop" onclick="if(event.target===this)closeLogin()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeLogin()">&#x2715;</button>
+    <div class="modal-eyebrow">WELCOME BACK</div>
+    <h2>Sign in to Kaira</h2>
+    <p class="modal-sub">Your AI remembers you. Pick up exactly where you left off.</p>
+    <form onsubmit="handleLogin(event)">
+      <div class="modal-field">
+        <label class="modal-label" for="loginEmail">EMAIL</label>
+        <input class="modal-input" id="loginEmail" type="email" placeholder="you@example.com" required autocomplete="email">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label" for="loginPassword">PASSWORD</label>
+        <input class="modal-input" id="loginPassword" type="password" placeholder="••••••••" required autocomplete="current-password">
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn-primary" id="loginBtn" type="submit">SIGN IN</button>
+        <div class="modal-divider">OR</div>
+        <button class="modal-btn-google" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#EA4335" d="M5.27 9.76A7.08 7.08 0 0112 4.9c1.69 0 3.21.59 4.41 1.56l3.3-3.3A11.95 11.95 0 0012 .9C8.27.9 5.02 2.93 3.14 5.96l2.13 3.8z"/><path fill="#34A853" d="M16.04 18.01A7.08 7.08 0 0112 19.1c-2.9 0-5.38-1.76-6.54-4.3l-3.86 2.98C3.84 21.32 7.66 23.1 12 23.1c3.49 0 6.63-1.23 9.03-3.25l-4.99-1.84z"/><path fill="#4A90D9" d="M21.03 19.85C22.9 17.84 24 15.1 24 12c0-.9-.1-1.77-.27-2.61H12v5.22h6.72a5.83 5.83 0 01-2.68 3.8l4.99 1.44z"/><path fill="#FBBC05" d="M5.46 14.8A7.14 7.14 0 014.9 12c0-.97.17-1.92.46-2.8L3.14 5.96A11.97 11.97 0 000 12c0 2.03.51 3.95 1.4 5.62l4.06-2.82z"/></svg>
+          CONTINUE WITH GOOGLE
+        </button>
+      </div>
+    </form>
+    <div class="modal-footer">
+      Don't have an account? <a href="#beta" onclick="closeLogin();document.getElementById('beta').scrollIntoView({behavior:'smooth'})">Get early access</a>
+    </div>
+    <div class="modal-note">Launching September 15, 2026 &mdash; login goes live on launch day.</div>
+  </div>
+</div>
+
 </body>
 </html>
