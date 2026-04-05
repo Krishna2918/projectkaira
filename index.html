@@ -28,6 +28,7 @@
 <meta name="theme-color" content="#060606">
 
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root {
   --bg: #060606;
@@ -825,37 +826,143 @@ function handleLogin(e){
     btn.disabled=false;
   },1200);
 }
+
+// Google OAuth
+var GOOGLE_CLIENT_ID='PASTE_YOUR_CLIENT_ID_HERE';
+var googleClient=null;
+
+function initGoogleAuth(){
+  if(!window.google||!window.google.accounts) return;
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: handleGoogleCredential,
+    auto_select: false,
+    cancel_on_tap_outside: true
+  });
+}
+
+function startGoogleLogin(){
+  if(!window.google||!window.google.accounts){
+    alert('Google Sign-In is loading, please try again.');
+    return;
+  }
+  if(GOOGLE_CLIENT_ID==='PASTE_YOUR_CLIENT_ID_HERE'){
+    alert('Google Client ID not configured yet.');
+    return;
+  }
+  googleClient=google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: 'openid email profile',
+    callback: function(response){
+      if(response.error){console.error(response);return;}
+      fetchGoogleUserInfo(response.access_token);
+    }
+  });
+  googleClient.requestAccessToken();
+}
+
+function fetchGoogleUserInfo(accessToken){
+  var btn=document.getElementById('googleBtn');
+  btn.textContent='SIGNING IN...';
+  btn.disabled=true;
+  fetch('https://www.googleapis.com/oauth2/v3/userinfo',{
+    headers:{Authorization:'Bearer '+accessToken}
+  })
+  .then(function(r){return r.json();})
+  .then(function(user){
+    showSignedIn(user);
+  })
+  .catch(function(){
+    btn.innerHTML='<span style="color:var(--red)">Error — please try again</span>';
+    btn.disabled=false;
+  });
+}
+
+function showSignedIn(user){
+  document.getElementById('modalSignIn').style.display='none';
+  var si=document.getElementById('modalSignedIn');
+  si.style.display='block';
+  document.getElementById('googleName').textContent=user.name||'';
+  document.getElementById('googleEmail').textContent=user.email||'';
+  var av=document.getElementById('googleAvatar');
+  if(user.picture){av.src=user.picture;av.style.display='inline-block';}
+  else{av.style.display='none';}
+}
+
+function googleSignOut(){
+  if(window.google&&window.google.accounts){
+    google.accounts.id.disableAutoSelect();
+  }
+  document.getElementById('modalSignedIn').style.display='none';
+  document.getElementById('modalSignIn').style.display='block';
+  var btn=document.getElementById('googleBtn');
+  btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24"><path fill="#EA4335" d="M5.27 9.76A7.08 7.08 0 0112 4.9c1.69 0 3.21.59 4.41 1.56l3.3-3.3A11.95 11.95 0 0012 .9C8.27.9 5.02 2.93 3.14 5.96l2.13 3.8z"/><path fill="#34A853" d="M16.04 18.01A7.08 7.08 0 0112 19.1c-2.9 0-5.38-1.76-6.54-4.3l-3.86 2.98C3.84 21.32 7.66 23.1 12 23.1c3.49 0 6.63-1.23 9.03-3.25l-4.99-1.84z"/><path fill="#4A90D9" d="M21.03 19.85C22.9 17.84 24 15.1 24 12c0-.9-.1-1.77-.27-2.61H12v5.22h6.72a5.83 5.83 0 01-2.68 3.8l4.99 1.44z"/><path fill="#FBBC05" d="M5.46 14.8A7.14 7.14 0 014.9 12c0-.97.17-1.92.46-2.8L3.14 5.96A11.97 11.97 0 000 12c0 2.03.51 3.95 1.4 5.62l4.06-2.82z"/></svg> CONTINUE WITH GOOGLE';
+  btn.disabled=false;
+}
+
+function handleGoogleCredential(response){
+  // Fallback: decode JWT for user info (no server needed)
+  var parts=response.credential.split('.');
+  var payload=JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+  showSignedIn({name:payload.name,email:payload.email,picture:payload.picture});
+}
+
+window.addEventListener('load',function(){
+  // Wait for GIS lib to load then init
+  var t=setInterval(function(){
+    if(window.google&&window.google.accounts){
+      clearInterval(t);
+      initGoogleAuth();
+    }
+  },200);
+});
 </script>
 
 <!-- Login Modal -->
 <div class="modal-backdrop" id="loginBackdrop" onclick="if(event.target===this)closeLogin()">
   <div class="modal">
     <button class="modal-close" onclick="closeLogin()">&#x2715;</button>
-    <div class="modal-eyebrow">WELCOME BACK</div>
-    <h2>Sign in to Kaira</h2>
-    <p class="modal-sub">Your AI remembers you. Pick up exactly where you left off.</p>
-    <form onsubmit="handleLogin(event)">
-      <div class="modal-field">
-        <label class="modal-label" for="loginEmail">EMAIL</label>
-        <input class="modal-input" id="loginEmail" type="email" placeholder="you@example.com" required autocomplete="email">
-      </div>
-      <div class="modal-field">
-        <label class="modal-label" for="loginPassword">PASSWORD</label>
-        <input class="modal-input" id="loginPassword" type="password" placeholder="••••••••" required autocomplete="current-password">
-      </div>
-      <div class="modal-actions">
-        <button class="modal-btn-primary" id="loginBtn" type="submit">SIGN IN</button>
-        <div class="modal-divider">OR</div>
-        <button class="modal-btn-google" type="button">
+
+    <!-- Signed-in state (hidden by default) -->
+    <div id="modalSignedIn" style="display:none;text-align:center;padding:8px 0 16px">
+      <img id="googleAvatar" src="" alt="" style="width:56px;height:56px;border-radius:50%;border:1px solid var(--border);margin-bottom:16px">
+      <div style="font-size:9px;letter-spacing:3px;color:var(--teal);font-weight:600;margin-bottom:8px">SIGNED IN</div>
+      <div id="googleName" style="font-family:'DM Serif Display',serif;font-size:22px;font-weight:400;margin-bottom:4px"></div>
+      <div id="googleEmail" style="font-size:12px;color:var(--dim);margin-bottom:28px"></div>
+      <p style="font-size:12px;color:var(--dim);line-height:1.6;margin-bottom:24px">You're on the early-access list.<br>We'll notify you when the app is live on <b style="color:var(--text)">September 15, 2026</b>.</p>
+      <button class="modal-btn-primary" onclick="closeLogin()" style="letter-spacing:2px">DONE</button>
+      <div style="margin-top:16px"><button onclick="googleSignOut()" style="background:none;border:none;color:var(--muted);font-size:10px;cursor:pointer;font-family:inherit;letter-spacing:1px">Sign out</button></div>
+    </div>
+
+    <!-- Sign-in form (shown by default) -->
+    <div id="modalSignIn">
+      <div class="modal-eyebrow">WELCOME BACK</div>
+      <h2>Sign in to Kaira</h2>
+      <p class="modal-sub">Your AI remembers you. Pick up exactly where you left off.</p>
+      <div class="modal-actions" style="margin-top:0">
+        <button class="modal-btn-google" type="button" id="googleBtn" onclick="startGoogleLogin()">
           <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#EA4335" d="M5.27 9.76A7.08 7.08 0 0112 4.9c1.69 0 3.21.59 4.41 1.56l3.3-3.3A11.95 11.95 0 0012 .9C8.27.9 5.02 2.93 3.14 5.96l2.13 3.8z"/><path fill="#34A853" d="M16.04 18.01A7.08 7.08 0 0112 19.1c-2.9 0-5.38-1.76-6.54-4.3l-3.86 2.98C3.84 21.32 7.66 23.1 12 23.1c3.49 0 6.63-1.23 9.03-3.25l-4.99-1.84z"/><path fill="#4A90D9" d="M21.03 19.85C22.9 17.84 24 15.1 24 12c0-.9-.1-1.77-.27-2.61H12v5.22h6.72a5.83 5.83 0 01-2.68 3.8l4.99 1.44z"/><path fill="#FBBC05" d="M5.46 14.8A7.14 7.14 0 014.9 12c0-.97.17-1.92.46-2.8L3.14 5.96A11.97 11.97 0 000 12c0 2.03.51 3.95 1.4 5.62l4.06-2.82z"/></svg>
           CONTINUE WITH GOOGLE
         </button>
+        <div class="modal-divider">OR</div>
       </div>
-    </form>
-    <div class="modal-footer">
-      Don't have an account? <a href="#beta" onclick="closeLogin();document.getElementById('beta').scrollIntoView({behavior:'smooth'})">Get early access</a>
+      <form onsubmit="handleLogin(event)">
+        <div class="modal-field">
+          <label class="modal-label" for="loginEmail">EMAIL</label>
+          <input class="modal-input" id="loginEmail" type="email" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="modal-field">
+          <label class="modal-label" for="loginPassword">PASSWORD</label>
+          <input class="modal-input" id="loginPassword" type="password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn-primary" id="loginBtn" type="submit">SIGN IN</button>
+        </div>
+      </form>
+      <div class="modal-footer">
+        Don't have an account? <a href="#beta" onclick="closeLogin();document.getElementById('beta').scrollIntoView({behavior:'smooth'})">Get early access</a>
+      </div>
     </div>
-    <div class="modal-note">Launching September 15, 2026 &mdash; login goes live on launch day.</div>
   </div>
 </div>
 
