@@ -54,6 +54,29 @@ nav{position:fixed;top:0;width:100%;z-index:100;padding:0 48px;height:56px;displ
 .pill{font-size:10px;letter-spacing:1.5px;font-weight:600;padding:7px 16px;border:1px solid var(--red);color:var(--red);background:none;cursor:pointer;transition:all 0.2s;font-family:inherit}
 .pill:hover{background:var(--red);color:#fff}
 
+/* Hamburger */
+.nav-l{display:flex;align-items:center;gap:16px}
+.hamburger{width:32px;height:32px;display:flex;flex-direction:column;justify-content:center;gap:5px;cursor:pointer;padding:4px;background:none;border:none}
+.hamburger span{display:block;width:18px;height:1px;background:var(--dim);transition:all 0.25s;transform-origin:center}
+.hamburger:hover span{background:var(--text)}
+.hamburger.open span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+.hamburger.open span:nth-child(2){opacity:0;transform:scaleX(0)}
+.hamburger.open span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+
+/* Drawer */
+.drawer{position:fixed;top:56px;left:0;width:240px;height:calc(100vh - 56px);background:rgba(8,8,8,0.97);backdrop-filter:blur(32px);border-right:1px solid var(--border);z-index:99;transform:translateX(-100%);transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);display:flex;flex-direction:column;padding:32px 0}
+.drawer.open{transform:translateX(0)}
+.drawer-item{display:flex;align-items:center;gap:12px;padding:14px 28px;font-size:11px;letter-spacing:1.5px;font-weight:500;color:var(--dim);text-decoration:none;transition:color 0.2s,background 0.2s;cursor:pointer;border:none;background:none;width:100%;font-family:inherit;text-align:left}
+.drawer-item:hover{color:var(--text);background:rgba(255,255,255,0.03)}
+.drawer-item svg{width:14px;height:14px;opacity:0.5;flex-shrink:0}
+.drawer-item:hover svg{opacity:1}
+.drawer-divider{height:1px;background:var(--border);margin:12px 28px}
+.drawer-login{color:var(--text);border-top:1px solid var(--border);margin-top:auto}
+.drawer-login:hover{color:var(--red)}
+.drawer-login svg{opacity:0.7}
+.drawer-overlay{position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.5);z-index:98;opacity:0;pointer-events:none;transition:opacity 0.3s}
+.drawer-overlay.open{opacity:1;pointer-events:auto}
+
 .hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 48px;position:relative}
 .hero-left{max-width:460px;display:flex;align-items:center}
 .hero-right{display:flex;flex-direction:column;align-items:center}
@@ -320,7 +343,12 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 <body>
 
 <nav>
-  <div class="logo">PROJECT <b>KAIRA</b></div>
+  <div class="nav-l">
+    <button class="hamburger" id="hamburger" aria-label="Menu" onclick="toggleDrawer()">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="logo">PROJECT <b>KAIRA</b></div>
+  </div>
   <div class="nav-r">
     <a href="#what">THE APP</a>
     <a href="#different">WHY</a>
@@ -328,6 +356,31 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
     <button class="pill" onclick="document.getElementById('beta').scrollIntoView({behavior:'smooth'})">GET EARLY ACCESS</button>
   </div>
 </nav>
+
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <a class="drawer-item" href="#what" onclick="closeDrawer()">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="14" height="14" rx="2"/><path d="M5 8h6M5 5h6M5 11h4"/></svg>
+    THE APP
+  </a>
+  <a class="drawer-item" href="#different" onclick="closeDrawer()">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
+    WHY KAIRA
+  </a>
+  <a class="drawer-item" href="#road" onclick="closeDrawer()">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 14L8 2l6 12"/><path d="M5 9h6"/></svg>
+    TIMELINE
+  </a>
+  <a class="drawer-item" href="#beta" onclick="closeDrawer()">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M2 4l6 5 6-5"/></svg>
+    EARLY ACCESS
+  </a>
+  <div class="drawer-divider"></div>
+  <button class="drawer-item drawer-login" onclick="closeDrawer()">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 8H2m0 0l3-3M2 8l3 3"/><path d="M7 4V3a1 1 0 011-1h5a1 1 0 011 1v10a1 1 0 01-1 1H8a1 1 0 01-1-1v-1"/></svg>
+    LOG IN
+  </button>
+</div>
 
 <div class="launch-banner" style="background:var(--red);padding:10px 48px;text-align:center;font-size:11px;letter-spacing:2px;font-weight:600;color:#fff;position:fixed;top:56px;width:100%;z-index:99">APP LAUNCHING SEPTEMBER 15, 2026</div>
 
@@ -525,6 +578,24 @@ footer{padding:40px 48px;border-top:1px solid var(--border);display:flex;justify
 </footer>
 
 <script>
+// Hamburger drawer
+function toggleDrawer(){
+  const d=document.getElementById('drawer');
+  const h=document.getElementById('hamburger');
+  const o=document.getElementById('drawerOverlay');
+  const open=d.classList.toggle('open');
+  h.classList.toggle('open',open);
+  o.classList.toggle('open',open);
+  document.body.style.overflow=open?'hidden':'';
+}
+function closeDrawer(){
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('hamburger').classList.remove('open');
+  document.getElementById('drawerOverlay').classList.remove('open');
+  document.body.style.overflow='';
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer()});
+
 // Mega text entrance
 setTimeout(()=>{
   const m=document.getElementById('megaText');
