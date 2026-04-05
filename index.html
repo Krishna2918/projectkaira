@@ -47,8 +47,7 @@
     btn.querySelector('span').textContent = 'OPENING GOOGLE...';
     try {
       const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      window._showSignedIn({ name: user.displayName, email: user.email, picture: user.photoURL });
+      window.location.href = '/dashboard';
     } catch(e) {
       btn.disabled = false;
       btn.querySelector('span').textContent = 'CONTINUE WITH GOOGLE';
@@ -68,8 +67,8 @@
   };
 
   onAuthStateChanged(auth, user => {
-    if (user) {
-      window._showSignedIn({ name: user.displayName, email: user.email, picture: user.photoURL });
+    if (user && window.location.pathname === '/') {
+      window.location.href = '/dashboard';
     }
   });
 </script>
