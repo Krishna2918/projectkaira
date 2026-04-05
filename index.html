@@ -34,15 +34,8 @@
   import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged }
     from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyCxGgsyfqafmyV3O6Rl9PYP8xgkj4nK56k",
-    authDomain: "kaira-app-85890.firebaseapp.com",
-    projectId: "kaira-app-85890",
-    storageBucket: "kaira-app-85890.firebasestorage.app",
-    messagingSenderId: "273184794573",
-    appId: "1:273184794573:web:1f3ec70cd653825d814684",
-    measurementId: "G-591DV1PR37"
-  };
+  // Config served by Firebase Hosting — never hardcoded in source
+  const firebaseConfig = await fetch('/__/firebase/init.json').then(r => r.json());
 
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
