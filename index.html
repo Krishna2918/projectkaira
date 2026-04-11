@@ -658,214 +658,229 @@ a, button, input { cursor: none; }
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
 
 // ═══════════════════════════════════════
-// 2D CANVAS — AURORA SCENE
+// THREE.JS 3D SCENE — NO POST-PROCESSING
+// Standard Phong materials → zero HDR blowout risk
 // ═══════════════════════════════════════
 const canvas = document.getElementById('webgl-canvas');
-const ctx = canvas.getContext('2d');
 const loader = document.getElementById('loader');
 const loaderBar = document.getElementById('loader-bar');
 const scrollHint = document.querySelector('.scroll-hint');
 
-let W, H, CX, CY;
-let mouse = { x: 0, y: 0 };
-let mouseSmooth = { x: 0, y: 0 };
+// ─── SHARED STATE ─────────────────────
+let mouse = { x: 0, y: 0, sx: 0, sy: 0 }; // raw + smoothed
 let cursorDot  = { x: -100, y: -100 };
 let cursorRing = { x: -100, y: -100 };
 let scrollY = 0;
-let sceneTime = 0;
 
 const dotEl  = document.getElementById('cursor-dot');
 const ringEl = document.getElementById('cursor-ring');
 
-function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width  = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx.scale(dpr, dpr);
-  CX = W / 2;
-  CY = H / 2;
+// ─── RENDERER ─────────────────────────
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: true, alpha: false,
+  powerPreference: 'high-performance'
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+// NO tone mapping, NO EffectComposer — standard materials cannot blow out
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.setClearColor(0x060309, 1);
+
+// ─── SCENE + CAMERA ───────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060309);
+scene.fog = new THREE.FogExp2(0x060309, 0.048);
+
+const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 6.5);
+
+// ─── LIGHTS ───────────────────────────
+// Dim ambient so geometry isn't pitch black in shadows
+scene.add(new THREE.AmbientLight(0x220038, 1.8));
+
+// Purple key light — orbits slowly
+const lightA = new THREE.PointLight(0xaa33ff, 4.5, 14);
+lightA.position.set(3, 2, 3);
+scene.add(lightA);
+
+// Rose fill light — counter-orbits
+const lightB = new THREE.PointLight(0xff3388, 3.0, 12);
+lightB.position.set(-2.5, -1.5, 2);
+scene.add(lightB);
+
+// Warm pink back rim
+const lightC = new THREE.PointLight(0xff88cc, 1.8, 10);
+lightC.position.set(0, -3, -3);
+scene.add(lightC);
+
+// ─── CENTRAL ORB ──────────────────────
+const orbGeo = new THREE.SphereGeometry(0.26, 48, 48);
+const orbMat = new THREE.MeshPhongMaterial({
+  color: 0xdd55ff,
+  emissive: 0x8800cc,
+  emissiveIntensity: 0.85,
+  shininess: 220,
+  transparent: true,
+  opacity: 0.92
+});
+const orb = new THREE.Mesh(orbGeo, orbMat);
+scene.add(orb);
+
+// Outer soft halo shell (large, very transparent)
+const haloMat = new THREE.MeshPhongMaterial({
+  color: 0x9922dd,
+  emissive: 0x550099,
+  emissiveIntensity: 0.4,
+  shininess: 30,
+  transparent: true,
+  opacity: 0.12,
+  side: THREE.BackSide
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.55, 32, 32), haloMat));
+
+// ─── RINGS ────────────────────────────
+function makeRing(radiusR, tube, color, emissive, rx, ry, rz, opacity) {
+  const m = new THREE.Mesh(
+    new THREE.TorusGeometry(radiusR, tube, 10, 140),
+    new THREE.MeshPhongMaterial({
+      color, emissive, emissiveIntensity: 0.55,
+      shininess: 180, transparent: true, opacity,
+      side: THREE.DoubleSide
+    })
+  );
+  m.rotation.set(rx, ry, rz);
+  scene.add(m);
+  return m;
 }
-resize();
+
+// Primary ring — purple, slightly tilted
+const ring1 = makeRing(1.55, 0.013, 0xcc44ff, 0x660099, 0.28, 0, 0, 0.82);
+// Rose ring — steeper tilt, slightly larger
+const ring2 = makeRing(1.82, 0.010, 0xff4499, 0x990044, 1.15, 0.22, 0.4, 0.62);
+// Violet ring — near-perpendicular, smaller
+const ring3 = makeRing(1.32, 0.008, 0x9944ff, 0x440088, 0.72, 1.18, 0.85, 0.48);
 
 // ─── PARTICLES ────────────────────────
-const PARTICLE_COUNT = 440;
-const particles = [];
+const N = 900;
+const pPos = new Float32Array(N * 3);
+const pCol = new Float32Array(N * 3);
 
-function initParticles() {
-  particles.length = 0;
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    particles.push({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      vx: (Math.random() - 0.5) * 0.22,
-      vy: (Math.random() - 0.5) * 0.22,
-      size: 0.5 + Math.random() * 1.5,
-      baseOpacity: 0.18 + Math.random() * 0.42,
-      hue: 268 + Math.random() * 78,   // purple → rose
-      pulseOffset: Math.random() * Math.PI * 2,
-      pulseSpeed: 0.28 + Math.random() * 0.72,
-    });
-  }
-}
-initParticles();
-
-// ─── AURORA ───────────────────────────
-function drawAurora() {
-  const mx = mouseSmooth.x * 38;
-  const my = mouseSmooth.y * 26;
-  const p1  = Math.sin(sceneTime * 0.34) * 0.06;
-  const p2  = Math.sin(sceneTime * 0.21 + 1.5) * 0.05;
-  const drift = {
-    x: Math.sin(sceneTime * 0.17) * 90,
-    y: Math.cos(sceneTime * 0.12) * 55,
+// Simple HSL→RGB for purple-rose range
+function hsl2rgb(h, s, l) {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
   };
-
-  // Outer deep-violet halo
-  const g0 = ctx.createRadialGradient(
-    CX + mx * 0.15, CY + my * 0.15, 0,
-    CX + mx * 0.15, CY + my * 0.15, W * (0.72 + p1)
-  );
-  g0.addColorStop(0,   'rgba(62, 12, 130, 0.10)');
-  g0.addColorStop(0.5, 'rgba(35,  6,  80, 0.05)');
-  g0.addColorStop(1,   'rgba(0,   0,   0, 0)');
-  ctx.fillStyle = g0;
-  ctx.fillRect(0, 0, W, H);
-
-  // Main purple core — breathes slowly
-  const g1 = ctx.createRadialGradient(
-    CX + mx * 0.55, CY + my * 0.55, 0,
-    CX + mx * 0.55, CY + my * 0.55, W * (0.30 + p1)
-  );
-  g1.addColorStop(0,    'rgba(130, 45, 230, 0.14)');
-  g1.addColorStop(0.38, 'rgba( 80, 22, 165, 0.07)');
-  g1.addColorStop(0.75, 'rgba( 40,  8, 100, 0.03)');
-  g1.addColorStop(1,    'rgba(0,   0,   0,  0)');
-  ctx.fillStyle = g1;
-  ctx.fillRect(0, 0, W, H);
-
-  // Rose/pink accent — drifts slowly off-center
-  const g2 = ctx.createRadialGradient(
-    CX + mx + drift.x + W * 0.13, CY + my + drift.y - H * 0.09, 0,
-    CX + mx + drift.x + W * 0.13, CY + my + drift.y - H * 0.09, W * (0.24 + p2)
-  );
-  g2.addColorStop(0,   'rgba(215, 65, 175, 0.11)');
-  g2.addColorStop(0.45,'rgba(150, 35, 130, 0.05)');
-  g2.addColorStop(1,   'rgba(0,   0,   0,  0)');
-  ctx.fillStyle = g2;
-  ctx.fillRect(0, 0, W, H);
-
-  // Deep magenta — counter-drift
-  const g3 = ctx.createRadialGradient(
-    CX + mx - drift.x * 0.65 - W * 0.11, CY + my - drift.y * 0.5 + H * 0.07, 0,
-    CX + mx - drift.x * 0.65 - W * 0.11, CY + my - drift.y * 0.5 + H * 0.07, W * (0.20 + p2 * 0.8)
-  );
-  g3.addColorStop(0,   'rgba(165, 35, 205, 0.10)');
-  g3.addColorStop(0.5, 'rgba( 95, 18, 155, 0.04)');
-  g3.addColorStop(1,   'rgba(0,   0,   0,  0)');
-  ctx.fillStyle = g3;
-  ctx.fillRect(0, 0, W, H);
-
-  // Tiny warm rose sparkle at center
-  const g4 = ctx.createRadialGradient(CX + mx, CY + my, 0, CX + mx, CY + my, W * 0.10);
-  g4.addColorStop(0,   'rgba(255, 120, 200, 0.09)');
-  g4.addColorStop(1,   'rgba(0,   0,   0,  0)');
-  ctx.fillStyle = g4;
-  ctx.fillRect(0, 0, W, H);
+  return [hue2rgb(p,q,h+1/3), hue2rgb(p,q,h), hue2rgb(p,q,h-1/3)];
 }
 
-// ─── CONNECTIONS ──────────────────────
-let connTick = 0;
-function drawConnections() {
-  connTick++;
-  if (connTick % 2 !== 0) return; // every other frame
-  const DIST = 108, DIST2 = DIST * DIST;
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const a = particles[i];
-    for (let j = i + 1; j < PARTICLE_COUNT; j++) {
-      const b = particles[j];
-      const dx = a.x - b.x, dy = a.y - b.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < DIST2) {
-        const t = 1 - Math.sqrt(d2) / DIST;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `rgba(175, 95, 255, ${t * 0.13})`;
-        ctx.lineWidth = t * 0.75;
-        ctx.stroke();
-      }
-    }
-  }
+for (let i = 0; i < N; i++) {
+  // Distribute on a shell, slightly flattened
+  const theta = Math.random() * Math.PI * 2;
+  const phi   = Math.acos(2 * Math.random() - 1);
+  const r     = 2.2 + Math.random() * 2.0;
+  pPos[i*3]   =  r * Math.sin(phi) * Math.cos(theta);
+  pPos[i*3+1] =  r * Math.sin(phi) * Math.sin(theta) * 0.7;
+  pPos[i*3+2] =  r * Math.cos(phi);
+
+  // Purple (0.72) → rose (1.0), bright and saturated
+  const h = 0.72 + Math.random() * 0.28;
+  const [r2,g2,b2] = hsl2rgb(h, 0.82, 0.65);
+  pCol[i*3] = r2; pCol[i*3+1] = g2; pCol[i*3+2] = b2;
 }
 
-// ─── PARTICLES UPDATE + DRAW ──────────
-function drawParticles() {
-  for (const p of particles) {
-    p.x += p.vx;
-    p.y += p.vy;
-    if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
-    if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeo.setAttribute('color',    new THREE.BufferAttribute(pCol, 3));
+const pMat = new THREE.PointsMaterial({
+  size: 0.038, vertexColors: true,
+  transparent: true, opacity: 0.75,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false, sizeAttenuation: true
+});
+const points = new THREE.Points(pGeo, pMat);
+scene.add(points);
 
-    const pulse = 0.65 + Math.sin(sceneTime * p.pulseSpeed + p.pulseOffset) * 0.35;
-    const op = p.baseOpacity * pulse;
-
-    // Soft halo
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = `hsla(${p.hue}, 78%, 68%, ${op * 0.13})`;
-    ctx.fill();
-
-    // Core dot
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = `hsla(${p.hue}, 84%, 74%, ${op})`;
-    ctx.fill();
-  }
-}
+// ─── CLOCK ────────────────────────────
+const clock = new THREE.Clock();
 
 // ─── MAIN LOOP ────────────────────────
-function animate(ts) {
+function animate() {
   requestAnimationFrame(animate);
-  sceneTime = ts * 0.001;
+  const t = clock.getElapsedTime();
 
-  // Smooth mouse
-  mouseSmooth.x += (mouse.x - mouseSmooth.x) * 0.04;
-  mouseSmooth.y += (mouse.y - mouseSmooth.y) * 0.04;
-
-  // Cursor lag
+  // ── Cursor lag ──
   cursorRing.x += (cursorDot.x - cursorRing.x) * 0.10;
   cursorRing.y += (cursorDot.y - cursorRing.y) * 0.10;
   dotEl.style.transform  = `translate(${cursorDot.x - 3}px,${cursorDot.y - 3}px)`;
   ringEl.style.transform = `translate(${cursorRing.x - 20}px,${cursorRing.y - 20}px)`;
 
-  // Scroll hint fade
+  // ── Mouse smooth ──
+  mouse.sx += (mouse.x - mouse.sx) * 0.042;
+  mouse.sy += (mouse.y - mouse.sy) * 0.042;
+
+  // ── Camera parallax ── (no gimbal lock: offset position, always look at 0)
+  camera.position.x = mouse.sx * 0.9;
+  camera.position.y = -mouse.sy * 0.6;
+  camera.lookAt(0, 0, 0);
+
+  // ── Orb: breathe + pulse emissive ──
+  const breathe = 1 + Math.sin(t * 1.1) * 0.10;
+  orb.scale.setScalar(breathe);
+  orbMat.emissiveIntensity = 0.65 + Math.sin(t * 0.75) * 0.28;
+
+  // ── Rings: each rotates independently showing clear 3D depth ──
+  ring1.rotation.z  = t * 0.16;
+  ring2.rotation.z  = t * 0.11;
+  ring2.rotation.x  = 1.15 + t * 0.07;
+  ring3.rotation.y  = t * 0.13;
+  ring3.rotation.z += 0.0006;
+
+  // ── Lights: orbit in 3D ──
+  lightA.position.set(
+    Math.cos(t * 0.38) * 4.5,
+    Math.sin(t * 0.22) * 2.0,
+    Math.sin(t * 0.38) * 4.5
+  );
+  lightB.position.set(
+    Math.cos(t * 0.28 + Math.PI) * 3.5,
+    Math.sin(t * 0.18 + 1) * 1.5,
+    Math.sin(t * 0.28 + Math.PI) * 3.5
+  );
+
+  // ── Particles: slow drift rotation ──
+  points.rotation.y = t * 0.025;
+  points.rotation.x = t * 0.012;
+
+  // ── Scroll-based fade ──
+  const heroAlpha = Math.max(0, 1 - scrollY / (window.innerHeight * 0.72));
+  scene.traverse(obj => {
+    if (obj.material && obj.material.transparent) {
+      obj.material.opacity = obj.userData.baseOpacity !== undefined
+        ? obj.userData.baseOpacity * heroAlpha
+        : obj.material.opacity;
+    }
+  });
   if (scrollHint) scrollHint.style.opacity = Math.max(0, 1 - scrollY / 110);
 
-  // Canvas fade-out as user scrolls into content sections
-  const heroAlpha = Math.max(0, 1 - scrollY / (H * 0.72));
-
-  // Clear
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#060309';
-  ctx.fillRect(0, 0, W, H);
-
-  if (heroAlpha > 0.01) {
-    ctx.globalAlpha = heroAlpha;
-    drawAurora();
-    drawConnections();
-    drawParticles();
-    ctx.globalAlpha = 1;
-  }
+  renderer.render(scene, camera);
 }
 
-// (Three.js removed — replaced by 2D canvas aurora above)
+// Store base opacities for scroll fade
+scene.traverse(obj => {
+  if (obj.material && obj.material.transparent) {
+    obj.userData.baseOpacity = obj.material.opacity;
+  }
+});
 
 // ═══════════════════════════════════════
 // LOADING
@@ -896,8 +911,8 @@ function simulateLoad() {
 // EVENTS
 // ═══════════════════════════════════════
 window.addEventListener('mousemove', e => {
-  mouse.x = (e.clientX / W - 0.5) * 2;
-  mouse.y = (e.clientY / H - 0.5) * 2;
+  mouse.x = (e.clientX / window.innerWidth  - 0.5) * 2;
+  mouse.y = (e.clientY / window.innerHeight - 0.5) * 2;
   cursorDot.x = e.clientX;
   cursorDot.y = e.clientY;
 });
@@ -908,7 +923,11 @@ document.querySelectorAll('a, button, input').forEach(el => {
 });
 
 window.addEventListener('scroll', () => { scrollY = window.scrollY; }, { passive: true });
-window.addEventListener('resize', () => { resize(); initParticles(); });
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
 
 // ═══════════════════════════════════════
 // INTERSECTION OBSERVER (section reveals)
@@ -1148,7 +1167,7 @@ waitlistForm.addEventListener('submit', async (e) => {
 async function init() {
   await simulateLoad();
   loader.classList.add('hidden');
-  requestAnimationFrame(animate);
+  animate();
   setTimeout(typewrite, 800);
 }
 
