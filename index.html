@@ -658,537 +658,218 @@ a, button, input { cursor: none; }
   </div>
 </div>
 
-<!-- Three.js addons via importmap (ES modules only — no duplicate global needed) -->
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
-
-<script type="module">
-import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+<script>
 
 // ═══════════════════════════════════════
-// GLOBALS
+// 2D CANVAS — AURORA SCENE
 // ═══════════════════════════════════════
 const canvas = document.getElementById('webgl-canvas');
+const ctx = canvas.getContext('2d');
 const loader = document.getElementById('loader');
 const loaderBar = document.getElementById('loader-bar');
 const scrollHint = document.querySelector('.scroll-hint');
 
-let mouse = { x: 0, y: 0, tx: 0, ty: 0 };
-// Cursor positions — dot tracks instantly, ring lags behind
+let W, H, CX, CY;
+let mouse = { x: 0, y: 0 };
+let mouseSmooth = { x: 0, y: 0 };
 let cursorDot  = { x: -100, y: -100 };
 let cursorRing = { x: -100, y: -100 };
 let scrollY = 0;
+let sceneTime = 0;
 
-// ═══════════════════════════════════════
-// SCENE SETUP
-// ═══════════════════════════════════════
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  alpha: false,
-  powerPreference: 'high-performance'
-});
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-// LinearToneMapping keeps shader values as-is — ACES at 1.2 was blowing out the whole scene to cream
-renderer.toneMapping = THREE.LinearToneMapping;
-renderer.toneMappingExposure = 1.0;
-renderer.setClearColor(0x060309, 1);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x060309);
-scene.fog = new THREE.FogExp2(0x060309, 0.08);
-
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 0, 5);
-
-// ═══════════════════════════════════════
-// TORUS (Neural Ring)
-// ═══════════════════════════════════════
-const torusVertexShader = `
-  varying vec3 vNormal;
-  varying vec3 vPosition;
-  varying vec3 vWorldPosition;
-  varying vec2 vUv;
-  uniform float uTime;
-
-  //
-  // Simplex-ish noise (compact)
-  //
-  vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-  vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-  vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-  vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
-  float snoise(vec3 v) {
-    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-    vec3 i = floor(v + dot(v, C.yyy));
-    vec3 x0 = v - i + dot(i, C.xxx);
-    vec3 g = step(x0.yzx, x0.xyz);
-    vec3 l = 1.0 - g;
-    vec3 i1 = min(g.xyz, l.zxy);
-    vec3 i2 = max(g.xyz, l.zxy);
-    vec3 x1 = x0 - i1 + C.xxx;
-    vec3 x2 = x0 - i2 + C.yyy;
-    vec3 x3 = x0 - D.yyy;
-    i = mod289(i);
-    vec4 p = permute(permute(permute(
-      i.z + vec4(0.0, i1.z, i2.z, 1.0))
-      + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-      + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-    float n_ = 0.142857142857;
-    vec3 ns = n_ * D.wyz - D.xzx;
-    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-    vec4 x_ = floor(j * ns.z);
-    vec4 y_ = floor(j - 7.0 * x_);
-    vec4 x = x_ * ns.x + ns.yyyy;
-    vec4 y = y_ * ns.x + ns.yyyy;
-    vec4 h = 1.0 - abs(x) - abs(y);
-    vec4 b0 = vec4(x.xy, y.xy);
-    vec4 b1 = vec4(x.zw, y.zw);
-    vec4 s0 = floor(b0) * 2.0 + 1.0;
-    vec4 s1 = floor(b1) * 2.0 + 1.0;
-    vec4 sh = -step(h, vec4(0.0));
-    vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
-    vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
-    vec3 p0 = vec3(a0.xy, h.x);
-    vec3 p1 = vec3(a0.zw, h.y);
-    vec3 p2 = vec3(a1.xy, h.z);
-    vec3 p3 = vec3(a1.zw, h.w);
-    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
-    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-    m = m * m;
-    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
-  }
-
-  void main() {
-    vec3 pos = position;
-    float n1 = snoise(pos * 2.0 + uTime * 0.3) * 0.12;
-    float n2 = snoise(pos * 4.0 - uTime * 0.2) * 0.05;
-    float n3 = snoise(pos * 8.0 + uTime * 0.5) * 0.02;
-    pos += normal * (n1 + n2 + n3);
-
-    vNormal = normalize(normalMatrix * normal);
-    vPosition = pos;
-    vWorldPosition = (modelMatrix * vec4(pos, 1.0)).xyz;
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`;
-
-const torusFragmentShader = `
-  varying vec3 vNormal;
-  varying vec3 vPosition;
-  varying vec3 vWorldPosition;
-  varying vec2 vUv;
-  uniform float uTime;
-  uniform vec3 uCameraPos;
-
-  vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
-  }
-
-  void main() {
-    vec3 viewDir = normalize(uCameraPos - vWorldPosition);
-    vec3 norm = normalize(vNormal);
-
-    // Fresnel
-    float fresnel = pow(1.0 - max(dot(norm, viewDir), 0.0), 3.0);
-
-    // Warm bestie hues: purples, pinks, roses, mauves
-    // Bias hue into 0.72–1.0 (purple→magenta→rose) range
-    float baseHue = mod(dot(norm, vec3(0.8, 0.4, 0.6)) * 0.35 + uTime * 0.04, 1.0);
-    float hue = 0.72 + baseHue * 0.28; // clamp to purple→rose arc
-    float hue2 = mod(hue + 0.15, 1.0); // neighbour: pink to rose
-
-    vec3 color1 = hsl2rgb(vec3(hue, 0.88, 0.58));
-    vec3 color2 = hsl2rgb(vec3(hue2, 0.92, 0.65));
-
-    // Thin-film: rosy gold shimmer
-    float thinFilm = sin(dot(norm, viewDir) * 10.0 + uTime * 0.25) * 0.5 + 0.5;
-    float filmHue = 0.08 + thinFilm * 0.12; // warm gold to amber
-    vec3 filmColor = hsl2rgb(vec3(filmHue, 0.75, 0.6));
-
-    vec3 baseColor = mix(color1, color2, fresnel);
-    baseColor = mix(baseColor, filmColor, 0.25);
-
-    // Edge glow — was 1.4, caused HDR blowout
-    float edgeGlow = pow(fresnel, 2.0) * 0.7;
-
-    // Subsurface-like scattering
-    float sss = pow(max(dot(viewDir, -norm), 0.0), 5.0) * 0.08;
-
-    // Keep finalColor strictly in [0,1] — tone mapping was amplifying beyond display range
-    vec3 finalColor = baseColor * 0.18 + baseColor * edgeGlow + vec3(sss);
-
-    // Sparkle — dampened so it doesn't spike luminance
-    float sparkle = pow(max(sin(vPosition.x * 40.0 + uTime) * sin(vPosition.y * 40.0 - uTime * 0.7) * sin(vPosition.z * 40.0 + uTime * 0.3), 0.0), 24.0);
-    finalColor += vec3(sparkle * 0.12);
-
-    // Hard clamp to prevent any pixel from blooming the whole scene to white
-    finalColor = clamp(finalColor, 0.0, 0.82);
-
-    gl_FragColor = vec4(finalColor, 0.85);
-  }
-`;
-
-const torusGeometry = new THREE.TorusGeometry(1.4, 0.38, 128, 256);
-const torusMaterial = new THREE.ShaderMaterial({
-  vertexShader: torusVertexShader,
-  fragmentShader: torusFragmentShader,
-  uniforms: {
-    uTime: { value: 0 },
-    uCameraPos: { value: camera.position.clone() }
-  },
-  transparent: true,
-  side: THREE.DoubleSide
-});
-
-const torusMesh = new THREE.Mesh(torusGeometry, torusMaterial);
-torusMesh.rotation.x = Math.PI * 0.15;
-scene.add(torusMesh);
-
-// ═══════════════════════════════════════
-// PARTICLES + CONNECTIONS
-// ═══════════════════════════════════════
-const PARTICLE_COUNT = 2500;
-const CONNECTION_DISTANCE = 0.9;
-const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
-const particleColors = new Float32Array(PARTICLE_COUNT * 3);
-const particleVelocities = new Float32Array(PARTICLE_COUNT * 3);
-
-for (let i = 0; i < PARTICLE_COUNT; i++) {
-  const i3 = i * 3;
-  // Distribute in a shell around the torus center
-  const theta = Math.random() * Math.PI * 2;
-  const phi = Math.random() * Math.PI * 2;
-  const r = 1.8 + Math.random() * 2.2;
-  particlePositions[i3]     = Math.cos(theta) * Math.cos(phi) * r;
-  particlePositions[i3 + 1] = Math.sin(phi) * r * 0.6;
-  particlePositions[i3 + 2] = Math.sin(theta) * Math.cos(phi) * r;
-
-  const brightness = 0.22 + Math.random() * 0.3;
-  // Warm purple/pink/rose particle palette
-  const t = Math.random();
-  if (t < 0.4) {
-    // purple
-    particleColors[i3]     = brightness * 0.75;
-    particleColors[i3 + 1] = brightness * 0.35;
-    particleColors[i3 + 2] = brightness;
-  } else if (t < 0.7) {
-    // pink/rose
-    particleColors[i3]     = brightness;
-    particleColors[i3 + 1] = brightness * 0.38;
-    particleColors[i3 + 2] = brightness * 0.72;
-  } else {
-    // warm white/mauve
-    particleColors[i3]     = brightness * 0.92;
-    particleColors[i3 + 1] = brightness * 0.7;
-    particleColors[i3 + 2] = brightness * 0.9;
-  }
-
-  particleVelocities[i3]     = (Math.random() - 0.5) * 0.003;
-  particleVelocities[i3 + 1] = (Math.random() - 0.5) * 0.003;
-  particleVelocities[i3 + 2] = (Math.random() - 0.5) * 0.003;
-}
-
-const particleGeometry = new THREE.BufferGeometry();
-particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
-particleGeometry.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
-
-const particleMaterial = new THREE.PointsMaterial({
-  size: 1.4,
-  vertexColors: true,
-  transparent: true,
-  opacity: 0.5,
-  blending: THREE.AdditiveBlending,
-  depthWrite: false,
-  sizeAttenuation: true
-});
-
-const particles = new THREE.Points(particleGeometry, particleMaterial);
-scene.add(particles);
-
-// Connection lines
-const MAX_CONNECTIONS = 5000;
-const linePositions = new Float32Array(MAX_CONNECTIONS * 6);
-const lineColors = new Float32Array(MAX_CONNECTIONS * 6);
-const lineGeometry = new THREE.BufferGeometry();
-lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-lineGeometry.setAttribute('color', new THREE.BufferAttribute(lineColors, 3));
-lineGeometry.setDrawRange(0, 0);
-
-const lineMaterial = new THREE.LineBasicMaterial({
-  vertexColors: true,
-  transparent: true,
-  opacity: 0.35,
-  blending: THREE.AdditiveBlending,
-  depthWrite: false
-});
-
-const linesMesh = new THREE.LineSegments(lineGeometry, lineMaterial);
-scene.add(linesMesh);
-
-// ═══════════════════════════════════════
-// POST-PROCESSING
-// ═══════════════════════════════════════
-const composer = new EffectComposer(renderer);
-const renderPass = new RenderPass(scene, camera);
-composer.addPass(renderPass);
-
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.45,  // strength — was 1.2, blown entire scene to cream
-  0.55,  // radius
-  0.48   // threshold — only bloom pixels above this luminance
-);
-composer.addPass(bloomPass);
-
-// Chromatic Aberration Pass
-const chromaticAberrationShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uOffset: { value: 0.002 },
-    uTime: { value: 0 }
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform float uOffset;
-    uniform float uTime;
-    varying vec2 vUv;
-
-    void main() {
-      vec2 center = vUv - 0.5;
-      float dist = length(center);
-      float offset = uOffset * dist * (1.0 + sin(uTime * 0.5) * 0.2);
-
-      vec2 dir = normalize(center + 0.0001);
-      float r = texture2D(tDiffuse, vUv + dir * offset).r;
-      float g = texture2D(tDiffuse, vUv).g;
-      float b = texture2D(tDiffuse, vUv - dir * offset).b;
-
-      gl_FragColor = vec4(r, g, b, 1.0);
-    }
-  `
-};
-
-const chromaticPass = new ShaderPass(chromaticAberrationShader);
-composer.addPass(chromaticPass);
-
-// Vignette pass
-const vignetteShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uDarkness: { value: 1.1 },
-    uOffset: { value: 1.0 }
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform float uDarkness;
-    uniform float uOffset;
-    varying vec2 vUv;
-
-    void main() {
-      vec4 texel = texture2D(tDiffuse, vUv);
-      vec2 uv = (vUv - 0.5) * 2.0;
-      float vig = 1.0 - dot(uv, uv) * 0.35 * uDarkness;
-      texel.rgb *= vig;
-      gl_FragColor = texel;
-    }
-  `
-};
-
-const vignettePass = new ShaderPass(vignetteShader);
-composer.addPass(vignettePass);
-
-// ═══════════════════════════════════════
-// ANIMATION LOOP
-// ═══════════════════════════════════════
-const clock = new THREE.Clock();
-// Hoist reusable objects — never allocate inside the hot loop
-const targetQuat = new THREE.Quaternion();
-const baseQuat   = new THREE.Quaternion();
-const euler      = new THREE.Euler(0, 0, 0, 'YXZ');
 const dotEl  = document.getElementById('cursor-dot');
 const ringEl = document.getElementById('cursor-ring');
 
-function updateParticles(time) {
-  const positions = particleGeometry.attributes.position.array;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
+  CX = W / 2;
+  CY = H / 2;
+}
+resize();
 
+// ─── PARTICLES ────────────────────────
+const PARTICLE_COUNT = 440;
+const particles = [];
+
+function initParticles() {
+  particles.length = 0;
   for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const i3 = i * 3;
-
-    // Drift
-    positions[i3]     += particleVelocities[i3];
-    positions[i3 + 1] += particleVelocities[i3 + 1];
-    positions[i3 + 2] += particleVelocities[i3 + 2];
-
-    // Gentle orbit around center
-    const x = positions[i3];
-    const z = positions[i3 + 2];
-    const angle = 0.0003;
-    positions[i3]     = x * Math.cos(angle) - z * Math.sin(angle);
-    positions[i3 + 2] = x * Math.sin(angle) + z * Math.cos(angle);
-
-    // Contain in sphere
-    const dist = Math.sqrt(positions[i3] ** 2 + positions[i3+1] ** 2 + positions[i3+2] ** 2);
-    if (dist > 4.5) {
-      const scale = 4.5 / dist;
-      positions[i3] *= scale;
-      positions[i3+1] *= scale;
-      positions[i3+2] *= scale;
-      particleVelocities[i3]     *= -0.5;
-      particleVelocities[i3 + 1] *= -0.5;
-      particleVelocities[i3 + 2] *= -0.5;
-    }
-    if (dist < 1.2) {
-      const scale = 1.2 / dist;
-      positions[i3] *= scale;
-      positions[i3+1] *= scale;
-      positions[i3+2] *= scale;
-    }
+    particles.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.22,
+      vy: (Math.random() - 0.5) * 0.22,
+      size: 0.5 + Math.random() * 1.5,
+      baseOpacity: 0.18 + Math.random() * 0.42,
+      hue: 268 + Math.random() * 78,   // purple → rose
+      pulseOffset: Math.random() * Math.PI * 2,
+      pulseSpeed: 0.28 + Math.random() * 0.72,
+    });
   }
+}
+initParticles();
 
-  particleGeometry.attributes.position.needsUpdate = true;
+// ─── AURORA ───────────────────────────
+function drawAurora() {
+  const mx = mouseSmooth.x * 38;
+  const my = mouseSmooth.y * 26;
+  const p1  = Math.sin(sceneTime * 0.34) * 0.06;
+  const p2  = Math.sin(sceneTime * 0.21 + 1.5) * 0.05;
+  const drift = {
+    x: Math.sin(sceneTime * 0.17) * 90,
+    y: Math.cos(sceneTime * 0.12) * 55,
+  };
+
+  // Outer deep-violet halo
+  const g0 = ctx.createRadialGradient(
+    CX + mx * 0.15, CY + my * 0.15, 0,
+    CX + mx * 0.15, CY + my * 0.15, W * (0.72 + p1)
+  );
+  g0.addColorStop(0,   'rgba(62, 12, 130, 0.10)');
+  g0.addColorStop(0.5, 'rgba(35,  6,  80, 0.05)');
+  g0.addColorStop(1,   'rgba(0,   0,   0, 0)');
+  ctx.fillStyle = g0;
+  ctx.fillRect(0, 0, W, H);
+
+  // Main purple core — breathes slowly
+  const g1 = ctx.createRadialGradient(
+    CX + mx * 0.55, CY + my * 0.55, 0,
+    CX + mx * 0.55, CY + my * 0.55, W * (0.30 + p1)
+  );
+  g1.addColorStop(0,    'rgba(130, 45, 230, 0.14)');
+  g1.addColorStop(0.38, 'rgba( 80, 22, 165, 0.07)');
+  g1.addColorStop(0.75, 'rgba( 40,  8, 100, 0.03)');
+  g1.addColorStop(1,    'rgba(0,   0,   0,  0)');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, W, H);
+
+  // Rose/pink accent — drifts slowly off-center
+  const g2 = ctx.createRadialGradient(
+    CX + mx + drift.x + W * 0.13, CY + my + drift.y - H * 0.09, 0,
+    CX + mx + drift.x + W * 0.13, CY + my + drift.y - H * 0.09, W * (0.24 + p2)
+  );
+  g2.addColorStop(0,   'rgba(215, 65, 175, 0.11)');
+  g2.addColorStop(0.45,'rgba(150, 35, 130, 0.05)');
+  g2.addColorStop(1,   'rgba(0,   0,   0,  0)');
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, W, H);
+
+  // Deep magenta — counter-drift
+  const g3 = ctx.createRadialGradient(
+    CX + mx - drift.x * 0.65 - W * 0.11, CY + my - drift.y * 0.5 + H * 0.07, 0,
+    CX + mx - drift.x * 0.65 - W * 0.11, CY + my - drift.y * 0.5 + H * 0.07, W * (0.20 + p2 * 0.8)
+  );
+  g3.addColorStop(0,   'rgba(165, 35, 205, 0.10)');
+  g3.addColorStop(0.5, 'rgba( 95, 18, 155, 0.04)');
+  g3.addColorStop(1,   'rgba(0,   0,   0,  0)');
+  ctx.fillStyle = g3;
+  ctx.fillRect(0, 0, W, H);
+
+  // Tiny warm rose sparkle at center
+  const g4 = ctx.createRadialGradient(CX + mx, CY + my, 0, CX + mx, CY + my, W * 0.10);
+  g4.addColorStop(0,   'rgba(255, 120, 200, 0.09)');
+  g4.addColorStop(1,   'rgba(0,   0,   0,  0)');
+  ctx.fillStyle = g4;
+  ctx.fillRect(0, 0, W, H);
 }
 
-function updateConnections() {
-  const positions = particleGeometry.attributes.position.array;
-  let lineCount = 0;
-
-  // Only check subset for performance
-  const step = Math.max(1, Math.floor(PARTICLE_COUNT / 600));
-
-  for (let i = 0; i < PARTICLE_COUNT && lineCount < MAX_CONNECTIONS; i += step) {
-    const i3 = i * 3;
-    const ax = positions[i3], ay = positions[i3+1], az = positions[i3+2];
-
-    for (let j = i + step; j < PARTICLE_COUNT && lineCount < MAX_CONNECTIONS; j += step) {
-      const j3 = j * 3;
-      const dx = positions[j3] - ax;
-      const dy = positions[j3+1] - ay;
-      const dz = positions[j3+2] - az;
-      const d2 = dx*dx + dy*dy + dz*dz;
-
-      if (d2 < CONNECTION_DISTANCE * CONNECTION_DISTANCE) {
-        const idx = lineCount * 6;
-        linePositions[idx]   = ax;
-        linePositions[idx+1] = ay;
-        linePositions[idx+2] = az;
-        linePositions[idx+3] = positions[j3];
-        linePositions[idx+4] = positions[j3+1];
-        linePositions[idx+5] = positions[j3+2];
-
-        const alpha = 1.0 - Math.sqrt(d2) / CONNECTION_DISTANCE;
-        const brightness = alpha * 0.28;
-        // purple-pink connection lines
-        lineColors[idx]   = brightness * 0.85;
-        lineColors[idx+1] = brightness * 0.28;
-        lineColors[idx+2] = brightness;
-        lineColors[idx+3] = brightness * 0.85;
-        lineColors[idx+4] = brightness * 0.28;
-        lineColors[idx+5] = brightness;
-
-        lineCount++;
+// ─── CONNECTIONS ──────────────────────
+let connTick = 0;
+function drawConnections() {
+  connTick++;
+  if (connTick % 2 !== 0) return; // every other frame
+  const DIST = 108, DIST2 = DIST * DIST;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const a = particles[i];
+    for (let j = i + 1; j < PARTICLE_COUNT; j++) {
+      const b = particles[j];
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < DIST2) {
+        const t = 1 - Math.sqrt(d2) / DIST;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = `rgba(175, 95, 255, ${t * 0.13})`;
+        ctx.lineWidth = t * 0.75;
+        ctx.stroke();
       }
     }
   }
-
-  lineGeometry.attributes.position.needsUpdate = true;
-  lineGeometry.attributes.color.needsUpdate = true;
-  lineGeometry.setDrawRange(0, lineCount * 2);
 }
 
-let frameCount = 0;
+// ─── PARTICLES UPDATE + DRAW ──────────
+function drawParticles() {
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+    if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
 
-function animate() {
+    const pulse = 0.65 + Math.sin(sceneTime * p.pulseSpeed + p.pulseOffset) * 0.35;
+    const op = p.baseOpacity * pulse;
+
+    // Soft halo
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${p.hue}, 78%, 68%, ${op * 0.13})`;
+    ctx.fill();
+
+    // Core dot
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${p.hue}, 84%, 74%, ${op})`;
+    ctx.fill();
+  }
+}
+
+// ─── MAIN LOOP ────────────────────────
+function animate(ts) {
   requestAnimationFrame(animate);
+  sceneTime = ts * 0.001;
 
-  const elapsed = clock.getElapsedTime();
-  frameCount++;
+  // Smooth mouse
+  mouseSmooth.x += (mouse.x - mouseSmooth.x) * 0.04;
+  mouseSmooth.y += (mouse.y - mouseSmooth.y) * 0.04;
 
-  // ── Cursor lag (ring follows dot with exponential ease) ──
+  // Cursor lag
   cursorRing.x += (cursorDot.x - cursorRing.x) * 0.10;
   cursorRing.y += (cursorDot.y - cursorRing.y) * 0.10;
-  dotEl.style.transform  = `translate(${cursorDot.x - 3}px, ${cursorDot.y - 3}px)`;
-  ringEl.style.transform = `translate(${cursorRing.x - 20}px, ${cursorRing.y - 20}px)`;
+  dotEl.style.transform  = `translate(${cursorDot.x - 3}px,${cursorDot.y - 3}px)`;
+  ringEl.style.transform = `translate(${cursorRing.x - 20}px,${cursorRing.y - 20}px)`;
 
-  // ── Mouse / camera smoothing ──
-  mouse.tx += (mouse.x - mouse.tx) * 0.055;
-  mouse.ty += (mouse.y - mouse.ty) * 0.055;
+  // Scroll hint fade
+  if (scrollHint) scrollHint.style.opacity = Math.max(0, 1 - scrollY / 110);
 
-  // Camera orbit via quaternion (no gimbal lock — no per-frame allocation)
-  euler.set(mouse.ty * 0.14, mouse.tx * 0.18, 0);
-  targetQuat.setFromEuler(euler);
-  baseQuat.identity();
-  const finalQuat = baseQuat.clone().multiply(targetQuat);
-  camera.quaternion.slerp(finalQuat, 0.035);
-  camera.position.set(
-    Math.sin(mouse.tx * 0.08) * 0.25,
-    Math.sin(mouse.ty * 0.08) * 0.18,
-    5
-  );
+  // Canvas fade-out as user scrolls into content sections
+  const heroAlpha = Math.max(0, 1 - scrollY / (H * 0.72));
 
-  // ── Torus ──
-  torusMesh.rotation.y += 0.0018;
-  torusMesh.rotation.z += 0.0008;
-  const breathe = 1.0 + Math.sin(elapsed * 0.75) * 0.038;
-  torusMesh.scale.setScalar(breathe);
-  torusMaterial.uniforms.uTime.value = elapsed;
-  torusMaterial.uniforms.uCameraPos.value.copy(camera.position);
+  // Clear
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#060309';
+  ctx.fillRect(0, 0, W, H);
 
-  // ── Scroll-based fade ──
-  const heroOpacity = Math.max(0, 1 - scrollY / (window.innerHeight * 0.75));
-  torusMesh.material.opacity    = 0.9 * heroOpacity;
-  particles.material.opacity    = 0.72 * heroOpacity;
-  lineMaterial.opacity          = 0.38 * heroOpacity;
-
-  // ── Scroll hint ──
-  if (scrollHint) scrollHint.style.opacity = Math.max(0, 1 - scrollY / 120);
-
-  // ── Particles + connections (skip when invisible) ──
-  updateParticles(elapsed);
-  if (heroOpacity > 0.02 && frameCount % 3 === 0) {
-    updateConnections();
+  if (heroAlpha > 0.01) {
+    ctx.globalAlpha = heroAlpha;
+    drawAurora();
+    drawConnections();
+    drawParticles();
+    ctx.globalAlpha = 1;
   }
-
-  // ── Post-processing ──
-  chromaticPass.uniforms.uTime.value = elapsed;
-
-  composer.render();
 }
+
+// (Three.js removed — replaced by 2D canvas aurora above)
 
 // ═══════════════════════════════════════
 // LOADING
 // ═══════════════════════════════════════
-// Inject loader bar width animation before it's needed
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `.loader-bar::after { width: var(--lp, 0%); transition: width 0.15s ease; }`;
 document.head.appendChild(styleSheet);
@@ -1214,47 +895,27 @@ function simulateLoad() {
 // ═══════════════════════════════════════
 // EVENTS
 // ═══════════════════════════════════════
-window.addEventListener('mousemove', (e) => {
-  mouse.x = (e.clientX / window.innerWidth - 0.5) * 2;
-  mouse.y = (e.clientY / window.innerHeight - 0.5) * 2;
-  // Dot tracks cursor exactly — ring lerps in RAF
+window.addEventListener('mousemove', e => {
+  mouse.x = (e.clientX / W - 0.5) * 2;
+  mouse.y = (e.clientY / H - 0.5) * 2;
   cursorDot.x = e.clientX;
   cursorDot.y = e.clientY;
 });
 
-// Cursor hover states
 document.querySelectorAll('a, button, input').forEach(el => {
   el.addEventListener('mouseenter', () => ringEl.classList.add('hovering'));
   el.addEventListener('mouseleave', () => ringEl.classList.remove('hovering'));
 });
 
-window.addEventListener('scroll', () => {
-  scrollY = window.scrollY;
-}, { passive: true });
-
-window.addEventListener('resize', () => {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
-  composer.setSize(w, h);
-  bloomPass.resolution.set(w, h);
-});
+window.addEventListener('scroll', () => { scrollY = window.scrollY; }, { passive: true });
+window.addEventListener('resize', () => { resize(); initParticles(); });
 
 // ═══════════════════════════════════════
 // INTERSECTION OBSERVER (section reveals)
 // ═══════════════════════════════════════
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      entry.target.classList.add('visible');
-    }
-  });
-}, {
-  threshold: 0.15,
-  rootMargin: '0px 0px -60px 0px'
-});
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.15, rootMargin: '0px 0px -60px 0px' });
 
 document.querySelectorAll('[data-reveal]').forEach(el => observer.observe(el));
 
@@ -1487,11 +1148,7 @@ waitlistForm.addEventListener('submit', async (e) => {
 async function init() {
   await simulateLoad();
   loader.classList.add('hidden');
-
-  // Start animation
-  animate();
-
-  // Start typewriter after a beat
+  requestAnimationFrame(animate);
   setTimeout(typewrite, 800);
 }
 
