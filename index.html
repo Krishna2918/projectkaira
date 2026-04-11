@@ -135,6 +135,8 @@ a, button, input { cursor: none; }
   top: 0; left: 0;
   width: 100%; height: 100%;
   z-index: 0;
+  /* Fallback if WebGL context fails — canvas is never white */
+  background: radial-gradient(ellipse at 50% 48%, #1a0830 0%, #060309 70%);
 }
 
 /* ── Audio Toggle ── */
@@ -698,8 +700,10 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.2;
+// LinearToneMapping keeps shader values as-is — ACES at 1.2 was blowing out the whole scene to cream
+renderer.toneMapping = THREE.LinearToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.setClearColor(0x060309, 1);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x060309);
@@ -821,19 +825,23 @@ const torusFragmentShader = `
     vec3 baseColor = mix(color1, color2, fresnel);
     baseColor = mix(baseColor, filmColor, 0.25);
 
-    // Edge glow
-    float edgeGlow = pow(fresnel, 1.5) * 1.4;
+    // Edge glow — was 1.4, caused HDR blowout
+    float edgeGlow = pow(fresnel, 2.0) * 0.7;
 
     // Subsurface-like scattering
-    float sss = pow(max(dot(viewDir, -norm), 0.0), 4.0) * 0.15;
+    float sss = pow(max(dot(viewDir, -norm), 0.0), 5.0) * 0.08;
 
-    vec3 finalColor = baseColor * 0.25 + baseColor * edgeGlow + vec3(sss);
+    // Keep finalColor strictly in [0,1] — tone mapping was amplifying beyond display range
+    vec3 finalColor = baseColor * 0.18 + baseColor * edgeGlow + vec3(sss);
 
-    // Subtle sparkle
-    float sparkle = pow(max(sin(vPosition.x * 40.0 + uTime) * sin(vPosition.y * 40.0 - uTime * 0.7) * sin(vPosition.z * 40.0 + uTime * 0.3), 0.0), 20.0);
-    finalColor += vec3(sparkle * 0.3);
+    // Sparkle — dampened so it doesn't spike luminance
+    float sparkle = pow(max(sin(vPosition.x * 40.0 + uTime) * sin(vPosition.y * 40.0 - uTime * 0.7) * sin(vPosition.z * 40.0 + uTime * 0.3), 0.0), 24.0);
+    finalColor += vec3(sparkle * 0.12);
 
-    gl_FragColor = vec4(finalColor, 0.88);
+    // Hard clamp to prevent any pixel from blooming the whole scene to white
+    finalColor = clamp(finalColor, 0.0, 0.82);
+
+    gl_FragColor = vec4(finalColor, 0.85);
   }
 `;
 
@@ -902,10 +910,10 @@ particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePosi
 particleGeometry.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
 
 const particleMaterial = new THREE.PointsMaterial({
-  size: 1.8,
+  size: 1.4,
   vertexColors: true,
   transparent: true,
-  opacity: 0.7,
+  opacity: 0.5,
   blending: THREE.AdditiveBlending,
   depthWrite: false,
   sizeAttenuation: true
@@ -943,9 +951,9 @@ composer.addPass(renderPass);
 
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  1.2,   // strength
-  0.6,   // radius
-  0.3    // threshold
+  0.45,  // strength — was 1.2, blown entire scene to cream
+  0.55,  // radius
+  0.48   // threshold — only bloom pixels above this luminance
 );
 composer.addPass(bloomPass);
 
