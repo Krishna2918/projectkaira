@@ -53,26 +53,29 @@ a, button, input { cursor: none; }
   position: fixed;
   top: 0; left: 0;
   width: 6px; height: 6px;
-  background: #fff;
+  background: rgba(255,255,255,0.9);
   border-radius: 50%;
   pointer-events: none;
   z-index: 10000;
   mix-blend-mode: difference;
-  transition: transform 0.1s;
+  will-change: transform;
 }
 .cursor-ring {
   position: fixed;
   top: 0; left: 0;
   width: 40px; height: 40px;
-  border: 1px solid rgba(210,160,255,0.45);
+  border: 1px solid rgba(210,140,255,0.55);
   border-radius: 50%;
   pointer-events: none;
   z-index: 10000;
-  transition: width 0.3s, height 0.3s, border-color 0.3s;
+  will-change: transform;
+  transition: width 0.35s cubic-bezier(0.16,1,0.3,1),
+              height 0.35s cubic-bezier(0.16,1,0.3,1),
+              border-color 0.35s ease;
 }
 .cursor-ring.hovering {
-  width: 60px; height: 60px;
-  border-color: rgba(240,160,255,0.75);
+  width: 64px; height: 64px;
+  border-color: rgba(240,140,255,0.8);
 }
 
 /* ── Film Grain ── */
@@ -170,7 +173,8 @@ a, button, input { cursor: none; }
 /* ── Sections ── */
 .section {
   position: relative;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 560px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -183,6 +187,7 @@ a, button, input { cursor: none; }
   flex-direction: column;
   gap: 0;
   padding: 0 48px;
+  background: transparent;
 }
 
 .hero-content {
@@ -201,7 +206,7 @@ a, button, input { cursor: none; }
   line-height: 0.85;
   letter-spacing: -0.04em;
   color: transparent;
-  -webkit-text-stroke: 1px rgba(255,255,255,0.04);
+  -webkit-text-stroke: 1px rgba(220,180,255,0.09);
   user-select: none;
   position: relative;
 }
@@ -268,9 +273,10 @@ a, button, input { cursor: none; }
 }
 
 .cta-btn:hover {
-  border-color: rgba(255,255,255,0.35);
-  color: #fff;
-  transform: translateY(-1px);
+  border-color: rgba(200,130,255,0.6);
+  color: rgba(230,200,255,1);
+  transform: translateY(-2px);
+  box-shadow: 0 0 28px rgba(180,100,255,0.18), 0 0 60px rgba(180,100,255,0.07);
 }
 .cta-btn:hover::before { opacity: 1; }
 
@@ -312,6 +318,14 @@ a, button, input { cursor: none; }
   padding: 0 48px;
   position: relative;
   overflow: hidden;
+  /* Ensure text is always readable over the fixed canvas */
+  background: linear-gradient(
+    180deg,
+    rgba(6,3,9,0.72) 0%,
+    rgba(6,3,9,0.88) 30%,
+    rgba(6,3,9,0.92) 70%,
+    rgba(6,3,9,0.78) 100%
+  );
 }
 
 .section-ghost {
@@ -320,8 +334,9 @@ a, button, input { cursor: none; }
   font-weight: 700;
   letter-spacing: -0.04em;
   color: transparent;
-  -webkit-text-stroke: 1px rgba(255,255,255,0.015);
+  -webkit-text-stroke: 1px rgba(200,140,255,0.028);
   user-select: none;
+  pointer-events: none;
   white-space: nowrap;
   top: 50%;
   left: 50%;
@@ -380,8 +395,8 @@ a, button, input { cursor: none; }
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(3,3,5,0.92);
-  backdrop-filter: blur(20px);
+  background: rgba(6,3,9,0.88);
+  backdrop-filter: blur(24px);
   z-index: 5000;
   display: flex;
   align-items: center;
@@ -399,11 +414,11 @@ a, button, input { cursor: none; }
   max-width: 440px;
   width: 90%;
   padding: 48px;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: rgba(10,10,15,0.9);
+  border: 1px solid rgba(200,140,255,0.1);
+  background: rgba(12,6,18,0.95);
   text-align: center;
   transform: translateY(20px);
-  transition: transform 0.4s ease;
+  transition: transform 0.4s cubic-bezier(0.16,1,0.3,1);
 }
 .modal-overlay.active .modal {
   transform: translateY(0);
@@ -497,6 +512,11 @@ a, button, input { cursor: none; }
   letter-spacing: 1px;
 }
 
+/* ── Footer ── */
+.footer {
+  background: rgba(6,3,9,0.96);
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .hero { padding: 0 24px; }
@@ -507,6 +527,17 @@ a, button, input { cursor: none; }
   body { cursor: auto; }
   .cursor-dot, .cursor-ring { display: none; }
   a, button, input { cursor: auto; }
+}
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  #webgl-canvas { display: none; }
+  .film-grain { display: none; }
+  body { background: var(--bg); }
 }
 </style>
 </head>
@@ -625,10 +656,7 @@ a, button, input { cursor: none; }
   </div>
 </div>
 
-<!-- Three.js r160 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js"></script>
-
-<!-- Three.js addons (EffectComposer, RenderPass, UnrealBloomPass, ShaderPass) loaded via importmap -->
+<!-- Three.js addons via importmap (ES modules only — no duplicate global needed) -->
 <script type="importmap">
 {
   "imports": {
@@ -651,9 +679,13 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 const canvas = document.getElementById('webgl-canvas');
 const loader = document.getElementById('loader');
 const loaderBar = document.getElementById('loader-bar');
+const scrollHint = document.querySelector('.scroll-hint');
+
 let mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+// Cursor positions — dot tracks instantly, ring lags behind
+let cursorDot  = { x: -100, y: -100 };
+let cursorRing = { x: -100, y: -100 };
 let scrollY = 0;
-let loadProgress = 0;
 
 // ═══════════════════════════════════════
 // SCENE SETUP
@@ -992,9 +1024,12 @@ composer.addPass(vignettePass);
 // ANIMATION LOOP
 // ═══════════════════════════════════════
 const clock = new THREE.Clock();
+// Hoist reusable objects — never allocate inside the hot loop
 const targetQuat = new THREE.Quaternion();
-const currentQuat = new THREE.Quaternion();
-const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const baseQuat   = new THREE.Quaternion();
+const euler      = new THREE.Euler(0, 0, 0, 'YXZ');
+const dotEl  = document.getElementById('cursor-dot');
+const ringEl = document.getElementById('cursor-ring');
 
 function updateParticles(time) {
   const positions = particleGeometry.attributes.position.array;
@@ -1089,54 +1124,55 @@ function animate() {
   requestAnimationFrame(animate);
 
   const elapsed = clock.getElapsedTime();
-  const delta = clock.getDelta();
   frameCount++;
 
-  // Mouse smoothing
-  mouse.tx += (mouse.x - mouse.tx) * 0.05;
-  mouse.ty += (mouse.y - mouse.ty) * 0.05;
+  // ── Cursor lag (ring follows dot with exponential ease) ──
+  cursorRing.x += (cursorDot.x - cursorRing.x) * 0.10;
+  cursorRing.y += (cursorDot.y - cursorRing.y) * 0.10;
+  dotEl.style.transform  = `translate(${cursorDot.x - 3}px, ${cursorDot.y - 3}px)`;
+  ringEl.style.transform = `translate(${cursorRing.x - 20}px, ${cursorRing.y - 20}px)`;
 
-  // Camera orbit via quaternion (no gimbal lock)
-  euler.set(
-    mouse.ty * 0.15,
-    mouse.tx * 0.2,
-    0
-  );
+  // ── Mouse / camera smoothing ──
+  mouse.tx += (mouse.x - mouse.tx) * 0.055;
+  mouse.ty += (mouse.y - mouse.ty) * 0.055;
+
+  // Camera orbit via quaternion (no gimbal lock — no per-frame allocation)
+  euler.set(mouse.ty * 0.14, mouse.tx * 0.18, 0);
   targetQuat.setFromEuler(euler);
-
-  const baseQuat = new THREE.Quaternion();
-  baseQuat.setFromEuler(new THREE.Euler(0, 0, 0));
+  baseQuat.identity();
   const finalQuat = baseQuat.clone().multiply(targetQuat);
-
-  camera.quaternion.slerp(finalQuat, 0.02);
+  camera.quaternion.slerp(finalQuat, 0.035);
   camera.position.set(
-    Math.sin(mouse.tx * 0.1) * 0.3,
-    Math.sin(mouse.ty * 0.1) * 0.2,
-    5 - scrollY * 0.001
+    Math.sin(mouse.tx * 0.08) * 0.25,
+    Math.sin(mouse.ty * 0.08) * 0.18,
+    5
   );
 
-  // Torus animation
-  torusMesh.rotation.y += 0.002;
-  torusMesh.rotation.z += 0.001;
-  const breathe = 1.0 + Math.sin(elapsed * 0.8) * 0.04;
+  // ── Torus ──
+  torusMesh.rotation.y += 0.0018;
+  torusMesh.rotation.z += 0.0008;
+  const breathe = 1.0 + Math.sin(elapsed * 0.75) * 0.038;
   torusMesh.scale.setScalar(breathe);
   torusMaterial.uniforms.uTime.value = elapsed;
   torusMaterial.uniforms.uCameraPos.value.copy(camera.position);
 
-  // Particles
+  // ── Scroll-based fade ──
+  const heroOpacity = Math.max(0, 1 - scrollY / (window.innerHeight * 0.75));
+  torusMesh.material.opacity    = 0.9 * heroOpacity;
+  particles.material.opacity    = 0.72 * heroOpacity;
+  lineMaterial.opacity          = 0.38 * heroOpacity;
+
+  // ── Scroll hint ──
+  if (scrollHint) scrollHint.style.opacity = Math.max(0, 1 - scrollY / 120);
+
+  // ── Particles + connections (skip when invisible) ──
   updateParticles(elapsed);
-  if (frameCount % 3 === 0) {
+  if (heroOpacity > 0.02 && frameCount % 3 === 0) {
     updateConnections();
   }
 
-  // Post-processing uniforms
-  chromaticAberrationShader.uniforms.uTime.value = elapsed;
-
-  // Scroll-based torus fade
-  const heroOpacity = Math.max(0, 1 - scrollY / (window.innerHeight * 0.8));
-  torusMesh.material.opacity = 0.88 * heroOpacity;
-  particles.material.opacity = 0.7 * heroOpacity;
-  lineMaterial.opacity = 0.35 * heroOpacity;
+  // ── Post-processing ──
+  chromaticPass.uniforms.uTime.value = elapsed;
 
   composer.render();
 }
@@ -1144,28 +1180,28 @@ function animate() {
 // ═══════════════════════════════════════
 // LOADING
 // ═══════════════════════════════════════
+// Inject loader bar width animation before it's needed
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `.loader-bar::after { width: var(--lp, 0%); transition: width 0.15s ease; }`;
+document.head.appendChild(styleSheet);
+
 function simulateLoad() {
   return new Promise(resolve => {
     let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 15 + 5;
+    const tick = () => {
+      progress += Math.random() * 14 + 4;
       if (progress >= 100) {
         progress = 100;
-        clearInterval(interval);
-        loaderBar.querySelector('::after') || null;
-        loaderBar.style.setProperty('--progress', '100%');
-        setTimeout(resolve, 400);
+        document.documentElement.style.setProperty('--lp', '100%');
+        setTimeout(resolve, 350);
+        return;
       }
-      loaderBar.querySelector('style') || null;
       document.documentElement.style.setProperty('--lp', progress + '%');
-    }, 120);
+      setTimeout(tick, 100 + Math.random() * 60);
+    };
+    tick();
   });
 }
-
-// Inject dynamic loader bar width
-const styleSheet = document.createElement('style');
-styleSheet.textContent = `.loader-bar::after { width: var(--lp, 0%); }`;
-document.head.appendChild(styleSheet);
 
 // ═══════════════════════════════════════
 // EVENTS
@@ -1173,27 +1209,20 @@ document.head.appendChild(styleSheet);
 window.addEventListener('mousemove', (e) => {
   mouse.x = (e.clientX / window.innerWidth - 0.5) * 2;
   mouse.y = (e.clientY / window.innerHeight - 0.5) * 2;
-
-  // Cursor
-  const dot = document.getElementById('cursor-dot');
-  const ring = document.getElementById('cursor-ring');
-  dot.style.transform = `translate(${e.clientX - 3}px, ${e.clientY - 3}px)`;
-  ring.style.transform = `translate(${e.clientX - 20}px, ${e.clientY - 20}px)`;
+  // Dot tracks cursor exactly — ring lerps in RAF
+  cursorDot.x = e.clientX;
+  cursorDot.y = e.clientY;
 });
 
 // Cursor hover states
-document.querySelectorAll('a, button, input, .cta-btn').forEach(el => {
-  el.addEventListener('mouseenter', () => {
-    document.getElementById('cursor-ring').classList.add('hovering');
-  });
-  el.addEventListener('mouseleave', () => {
-    document.getElementById('cursor-ring').classList.remove('hovering');
-  });
+document.querySelectorAll('a, button, input').forEach(el => {
+  el.addEventListener('mouseenter', () => ringEl.classList.add('hovering'));
+  el.addEventListener('mouseleave', () => ringEl.classList.remove('hovering'));
 });
 
 window.addEventListener('scroll', () => {
   scrollY = window.scrollY;
-});
+}, { passive: true });
 
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
