@@ -3,178 +3,691 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KAIRA — Your Early Access</title>
+<title>KAIRA — Your Dashboard</title>
 <meta name="robots" content="noindex,nofollow">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" content="#060606">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-<!-- Firebase -->
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
   import { getAuth, onAuthStateChanged, signOut }
     from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore, doc, setDoc, getDoc, getDocFromServer, updateDoc, increment,
+           runTransaction, collection, getCountFromServer, onSnapshot, arrayUnion, serverTimestamp }
+    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
   const firebaseConfig = await fetch('/__/firebase/init.json').then(r => r.json());
+  firebaseConfig.authDomain = 'projectkaira.ca';
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
+  const db = getFirestore(app);
 
-  onAuthStateChanged(auth, user => {
-    if (!user) {
-      window.location.href = '/';
+  let currentUser = null;
+  let userDoc = null;
+
+  onAuthStateChanged(auth, async user => {
+    if (!user) { window.location.href = '/'; return; }
+    currentUser = user;
+    await setupUser(user);
+    if (userDoc?.onboardingComplete !== true) {
+      window.location.href = '/onboarding';
       return;
     }
     initDashboard(user);
   });
 
-  window._signOut = async () => {
-    await signOut(auth);
-    window.location.href = '/';
+  async function setupUser(user) {
+    const ref = doc(db, 'users', user.uid);
+    const statsRef = doc(db, 'meta', 'stats');
+    const snap = await getDocFromServer(ref);
+    const refParam = new URLSearchParams(window.location.search).get('ref');
+
+    if (!snap.exists()) {
+      // New user — assign sequential member number via transaction
+      const memberNumber = await runTransaction(db, async tx => {
+        const stats = await tx.get(statsRef);
+        const next = (stats.exists() ? (stats.data().totalMembers || 0) : 0) + 1;
+        tx.set(statsRef, { totalMembers: next }, { merge: true });
+        tx.set(ref, {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          joinedAt: serverTimestamp(),
+          aiName: '',
+          referredBy: refParam || null,
+          featureVote: null,
+          memberNumber: next,
+        });
+        return next;
+      });
+      userDoc = { aiName: '', featureVote: null, memberNumber };
+    } else {
+      userDoc = snap.data();
+      // Backfill memberNumber for existing users who joined before this field existed
+      if (!userDoc.memberNumber) {
+        const stats = await getDoc(statsRef);
+        const n = stats.exists() ? (stats.data().totalMembers || 1) : 1;
+        await updateDoc(ref, { memberNumber: n });
+        userDoc.memberNumber = n;
+      }
+      await updateDoc(ref, {
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        email: user.email,
+      });
+    }
+  }
+
+  // Global: cast feature vote
+  window._castVote = async (featureId) => {
+    if (!currentUser) return;
+    const uref = doc(db, 'users', currentUser.uid);
+    const snap = await getDoc(uref);
+    const prev = snap.data()?.featureVote;
+
+    // Remove old vote
+    if (prev) {
+      await setDoc(doc(db, 'votes', prev), { count: increment(-1) }, { merge: true });
+    }
+    // Add new vote
+    await setDoc(doc(db, 'votes', featureId), { count: increment(1) }, { merge: true });
+    await updateDoc(uref, { featureVote: featureId });
+
+    // Update UI
+    document.querySelectorAll('.vote-btn').forEach(b => b.classList.remove('voted'));
+    const btn = document.querySelector(`[data-feature="${featureId}"]`);
+    if (btn) btn.classList.add('voted');
+    loadVotes();
   };
+
+  // Load live vote counts
+  async function loadVotes() {
+    const features = ['memory', 'voice', 'ondevice', 'proactive'];
+    const counts = {};
+    let total = 0;
+    for (const f of features) {
+      const snap = await getDoc(doc(db, 'votes', f));
+      counts[f] = snap.exists() ? (snap.data().count || 0) : 0;
+      total += counts[f];
+    }
+    if (total === 0) total = 1;
+    for (const f of features) {
+      const pct = Math.round((counts[f] / total) * 100);
+      const bar = document.getElementById(`vote-bar-${f}`);
+      const cnt = document.getElementById(`vote-count-${f}`);
+      if (bar) bar.style.width = pct + '%';
+      if (cnt) cnt.textContent = counts[f];
+    }
+  }
+
+  // Load real member count
+  async function loadMemberCount() {
+    try {
+      const snap = await getDoc(doc(db, 'meta', 'stats'));
+      const n = snap.exists() ? (snap.data().totalMembers || 1) : 1;
+      const el = document.getElementById('memberCount');
+      if (el) el.textContent = n.toLocaleString();
+    } catch(e) {}
+  }
+
+  function initDashboard(user) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('dashboard').style.display = 'block';
+
+    const first = (user.displayName || 'there').split(' ')[0];
+    document.getElementById('firstName').textContent = first;
+    document.getElementById('profileName').textContent = user.displayName || '—';
+    document.getElementById('profileEmail').textContent = user.email || '—';
+
+    // Nav avatar
+    const navAv = document.getElementById('navAvatar');
+    if (user.photoURL) {
+      navAv.outerHTML = `<img id="navAvatar" class="nav-avatar" src="${user.photoURL}" alt="${first}">`;
+    } else {
+      navAv.textContent = first[0].toUpperCase();
+    }
+
+    // Profile image
+    const profImg = document.getElementById('profileImg');
+    if (user.photoURL) {
+      profImg.outerHTML = `<img class="profile-img" src="${user.photoURL}" alt="${first}">`;
+    } else {
+      profImg.textContent = first[0].toUpperCase();
+    }
+
+    // Member number — from Firestore (sequential, not hashed)
+    const num = userDoc?.memberNumber || 1;
+    document.getElementById('memberBadge').textContent = `MEMBER #${num}`;
+
+    // Display AI name set during onboarding
+    const saved = userDoc?.aiName || localStorage.getItem('kaira_ai_name_' + user.uid) || '';
+    const nameEl = document.getElementById('aiNameDisplay');
+    if (nameEl) nameEl.textContent = saved || '—';
+
+    // Show AI name in greeting if set
+    if (saved) {
+      document.querySelector('.greeting h1').innerHTML =
+        `${saved} is ready,<br>waiting for <i>${first}</i>.`;
+    }
+
+    // Show focus area tag in greeting
+    if (userDoc?.focus) {
+      const focusLabels = {career:'Career & Work',health:'Health & Energy',building:'Building Something',
+        learning:'Learning & Growth',creative:'Creative Work',life:'Life & Relationships'};
+      document.querySelector('.greeting-sub').textContent =
+        `Your AI is focused on ${focusLabels[userDoc.focus] || userDoc.focus}. It remembers everything, learns your patterns, and gets sharper every week.`;
+    }
+
+    // Restore vote
+    if (userDoc?.featureVote) {
+      const btn = document.querySelector(`[data-feature="${userDoc.featureVote}"]`);
+      if (btn) btn.classList.add('voted');
+    }
+
+    // Referral link
+    const refLink = `https://projectkaira.ca?ref=${user.uid.slice(0,8)}`;
+    document.getElementById('refLink').textContent = refLink;
+    window._refLink = refLink;
+
+    // Memory profile
+    const memImport = userDoc?.memoryImport?.structured || null;
+    if (memImport) renderMemoryProfile(memImport);
+
+    // Live data
+    loadVotes();
+    loadMemberCount();
+    startCountdown();
+    initChat(user, userDoc);
+    initNotes(user.uid);
+    initNotifications(user.uid);
+  }
+
+  // ── Real-time chat with Ana via Firestore relay ──────────────
+  let _chatUid = null;
+  let _chatUserInitial = 'Y';
+  let _chatAiName = 'ANA';
+  let _chatListening = false;
+  let _lastMsgCount = 0;
+
+  function listenToChat(uid) {
+    if (_chatListening) return;
+    _chatListening = true;
+    onSnapshot(doc(db, 'chats', uid), snap => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const msgs = data.messages || [];
+      renderMessages(msgs);
+      if (data.status === 'idle') hideTypingIndicator();
+    });
+  }
+
+  function renderMessages(msgs) {
+    const wrap = document.getElementById('chatMessages');
+    if (!wrap) return;
+    // Only re-render if new messages arrived
+    if (msgs.length === _lastMsgCount) return;
+    _lastMsgCount = msgs.length;
+    wrap.innerHTML = '';
+    for (const m of msgs) {
+      if (m.role === 'user') {
+        appendUserMsg(m.content);
+      } else {
+        appendAiMsg(m.content);
+      }
+    }
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function appendAiMsg(text) {
+    const wrap = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'msg';
+    div.innerHTML = `
+      <div class="msg-avatar msg-kaira">${_chatAiName[0]}</div>
+      <div><div class="msg-name">${_chatAiName.toUpperCase()}</div><div class="msg-bubble"></div></div>`;
+    wrap.appendChild(div);
+    typewrite(div.querySelector('.msg-bubble'), text);
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function appendUserMsg(text) {
+    const wrap = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'msg user-msg';
+    div.innerHTML = `
+      <div class="msg-avatar msg-user">${_chatUserInitial}</div>
+      <div><div class="msg-name" style="text-align:right">${_chatUserInitial}</div><div class="msg-bubble" style="color:var(--dim);text-align:right">${text}</div></div>`;
+    wrap.appendChild(div);
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function hideTypingIndicator() {
+    const el = document.getElementById('typing-indicator');
+    if (el) el.remove();
+  }
+
+  async function sendToAna(text) {
+    if (!_chatUid || !text.trim()) return;
+    const newMsg = { role: 'user', content: text, ts: Date.now() };
+    // Optimistically render immediately
+    appendUserMsg(text);
+    addTypingIndicator();
+    _lastMsgCount++;
+    await setDoc(doc(db, 'chats', _chatUid), {
+      messages: arrayUnion(newMsg),
+      status: 'waiting',
+      pendingAt: serverTimestamp(),
+    }, { merge: true });
+  }
+
+  function addTypingIndicator() {
+    const wrap = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.id = 'typing-indicator';
+    div.className = 'msg';
+    div.innerHTML = `<div class="msg-avatar msg-kaira">${_chatAiName[0]}</div>
+      <div><div class="msg-name">${_chatAiName.toUpperCase()}</div><div class="msg-bubble">
+        <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+      </div></div>`;
+    wrap.appendChild(div);
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function initChat(user, uDoc) {
+    _chatUid = user.uid;
+    const first = (user.displayName || 'there').split(' ')[0];
+    _chatUserInitial = first[0].toUpperCase();
+    _chatAiName = uDoc?.aiName || 'ANA';
+
+    // Update label + hint
+    const labelEl = document.getElementById('chatLabel');
+    if (labelEl) labelEl.textContent = _chatAiName.toUpperCase();
+    const hintEl = document.getElementById('chatHint');
+    if (hintEl) hintEl.textContent = 'Talk directly to your AI. Responses come from Ana running on your machine.';
+
+    // Seed with welcome message if no history yet
+    getDoc(doc(db, 'chats', _chatUid)).then(snap => {
+      if (!snap.exists() || !(snap.data().messages?.length)) {
+        appendAiMsg(`Hi ${first} — I'm ${_chatAiName}. Ask me anything.`);
+        _lastMsgCount = 1;
+      }
+      listenToChat(_chatUid);
+    }).catch(() => {
+      appendAiMsg(`Hi ${first} — I'm ${_chatAiName}. Ask me anything.`);
+      listenToChat(_chatUid);
+    });
+  }
+
+  // ── Memory profile renderer ──────────────────────────────────
+  const SECTION_LABELS = {
+    IDENTITY: 'Identity',
+    PROJECTS: 'Active Projects',
+    SKILLS: 'Skills & Strengths',
+    GOALS: 'Goals',
+    PEOPLE: 'Key People',
+    PREFERENCES: 'Preferences',
+    CONTEXT: 'Life Context',
+    STANDING_INSTRUCTIONS: 'Standing Instructions',
+  };
+
+  function renderMemoryProfile(structured) {
+    const card = document.getElementById('memoryProfileCard');
+    const body = document.getElementById('memoryProfileBody');
+    if (!card || !body) return;
+
+    const ordered = ['IDENTITY','PROJECTS','SKILLS','GOALS','PEOPLE','PREFERENCES','CONTEXT','STANDING_INSTRUCTIONS'];
+    const rows = [];
+    const allKeys = [...ordered, ...Object.keys(structured).filter(k => !ordered.includes(k))];
+
+    for (const key of allKeys) {
+      const val = structured[key] || '';
+      if (!val) continue;
+      const label = SECTION_LABELS[key] || key;
+      rows.push(`
+        <div class="mem-section" style="border-bottom:1px solid var(--border);padding:0">
+          <div class="mem-section-header" onclick="toggleMemSection(this)" style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;cursor:pointer;user-select:none;transition:background .2s" onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
+            <span style="font-size:9px;letter-spacing:2.5px;font-weight:700;color:var(--dim)">${escapeHtml(label.toUpperCase())}</span>
+            <span style="font-size:9px;letter-spacing:1px;color:var(--dim);font-weight:600">EXPAND ↓</span>
+          </div>
+          <div class="mem-section-body" style="overflow:hidden;max-height:0;transition:max-height .3s ease">
+            <pre style="font-size:11px;color:var(--dim);line-height:1.7;padding:0 20px 14px;white-space:pre-wrap;word-break:break-word;font-family:inherit">${escapeHtml(val)}</pre>
+          </div>
+        </div>
+      `);
+    }
+
+    if (rows.length === 0) {
+      body.innerHTML = '<p style="font-size:12px;color:var(--dim);padding:20px">No memories imported yet. Complete setup to bootstrap your AI.</p>';
+    } else {
+      body.innerHTML = rows.join('');
+    }
+
+    card.style.display = 'block';
+  }
+
+  window.toggleMemSection = function(header) {
+    const body = header.nextElementSibling;
+    const toggle = header.querySelector('span:last-child');
+    const isOpen = body.style.maxHeight && body.style.maxHeight !== '0px';
+    body.style.maxHeight = isOpen ? '0px' : body.scrollHeight + 'px';
+    toggle.textContent = isOpen ? 'EXPAND ↓' : 'COLLAPSE ↑';
+  };
+
+  function escapeHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Notes ────────────────────────────────────────────────────
+  let _recognition = null;
+
+  function initNotes(uid) {
+    onSnapshot(collection(db, 'notes', uid, 'entries'), snap => {
+      const notes = snap.docs.map(d => ({id: d.id, ...d.data()}))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      renderNotes(notes);
+    });
+  }
+
+  window.toggleNoteInput = function() {
+    const area = document.getElementById('noteInputArea');
+    const open = area.style.display !== 'none';
+    area.style.display = open ? 'none' : 'block';
+    if (!open) document.getElementById('noteText').focus();
+  };
+
+  window.saveNote = async function() {
+    const text = document.getElementById('noteText').value.trim();
+    if (!text || !_chatUid) return;
+    await setDoc(doc(collection(db, 'notes', _chatUid, 'entries')), {
+      body: text,
+      createdAt: serverTimestamp(),
+      source: 'manual',
+    });
+    document.getElementById('noteText').value = '';
+    window.toggleNoteInput();
+  };
+
+  window.toggleDictation = function() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert('Voice dictation is not supported in this browser. Try Chrome.'); return; }
+    if (_recognition) { _recognition.stop(); _recognition = null; return; }
+    _recognition = new SR();
+    _recognition.continuous = true;
+    _recognition.interimResults = true;
+    _recognition.lang = 'en-US';
+    const ta = document.getElementById('noteText');
+    const status = document.getElementById('dictStatus');
+    const btn = document.getElementById('btnMic');
+    let base = ta.value;
+    _recognition.onresult = e => {
+      ta.value = base + (base ? ' ' : '') + Array.from(e.results).map(r => r[0].transcript).join('');
+    };
+    _recognition.onend = () => {
+      _recognition = null;
+      btn.textContent = '🎤 DICTATE';
+      status.style.display = 'none';
+    };
+    _recognition.start();
+    btn.textContent = '⏹ STOP';
+    status.style.display = 'block';
+  };
+
+  function renderNotes(notes) {
+    const list = document.getElementById('notesList');
+    const empty = document.getElementById('notesEmpty');
+    if (!notes.length) { list.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+    list.innerHTML = notes.map(n => `
+      <div style="border-top:1px solid var(--border);padding:14px 20px">
+        <div style="font-size:13px;color:var(--fg);white-space:pre-wrap;line-height:1.6">${escapeHtml(n.body)}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:.05em">${n.createdAt?.toDate?.()?.toLocaleString() || ''}</div>
+      </div>`).join('');
+  }
+
+  // ── Ana's Updates (proactive notification panel) ─────────────
+  const NOTIF_LABELS = {
+    jarvis: 'JARVIS', audit_alert: 'ALERT', scheduler: 'TASK',
+    morning_briefing: 'BRIEFING', foresight: 'FORESIGHT',
+    inner_dialogue: 'THOUGHT', autonomic_goal: 'GOAL'
+  };
+
+  function initNotifications(uid) {
+    onSnapshot(collection(db, 'notifications', uid, 'items'), snap => {
+      const items = snap.docs.map(d => ({id: d.id, ...d.data()}))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      renderNotifications(items);
+    });
+  }
+
+  function renderNotifications(items) {
+    const list = document.getElementById('notifList');
+    const empty = document.getElementById('notifEmpty');
+    const badge = document.getElementById('notifBadge');
+    const unread = items.filter(n => !n.read).length;
+    if (unread > 0) {
+      badge.textContent = unread; badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+    if (!items.length) { list.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+    list.innerHTML = items.map(n => `
+      <div style="border-top:1px solid var(--border);padding:14px 20px;opacity:${n.read ? '0.5' : '1'}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:9px;letter-spacing:.1em;color:var(--accent);margin-bottom:6px">${NOTIF_LABELS[n.type] || (n.type || 'UPDATE').toUpperCase()}</div>
+            <div style="font-size:12px;color:var(--fg);line-height:1.6;white-space:pre-wrap;word-break:break-word">${escapeHtml(n.body)}</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:6px;letter-spacing:.04em">${n.createdAt?.toDate?.()?.toLocaleString() || ''}</div>
+          </div>
+          <button onclick="replyToNotif(${JSON.stringify(n.id)}, ${JSON.stringify((n.body || '').substring(0, 120))})"
+            style="font-family:var(--font);font-size:9px;letter-spacing:.08em;white-space:nowrap;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 10px;cursor:pointer;flex-shrink:0;margin-top:2px">
+            REPLY ↩
+          </button>
+        </div>
+      </div>`).join('');
+  }
+
+  window.replyToNotif = async function(id, snippet) {
+    if (_chatUid) {
+      try {
+        await updateDoc(doc(db, 'notifications', _chatUid, 'items', id), {read: true});
+      } catch (_e) {}
+    }
+    const chatCard = document.getElementById('chatMessages')?.closest('[style]') ||
+                     document.getElementById('chatMessages')?.parentElement;
+    if (chatCard) chatCard.scrollIntoView({behavior: 'smooth', block: 'center'});
+    const input = document.getElementById('chatInput');
+    if (input) {
+      input.value = `Re: "${snippet}"  `;
+      input.focus();
+      input.selectionStart = input.selectionEnd = input.value.length;
+    }
+  };
+
+  // Expose sendToAna for non-module script
+  window._sendToAna = (text) => sendToAna(text);
+
+  window._signOut = async () => { await signOut(auth); window.location.href = '/'; };
 </script>
 
 <style>
 :root {
   --bg: #060606;
   --surface: #0c0c0c;
-  --surface2: #0f0f0f;
-  --border: #191919;
+  --surface2: #111;
+  --border: #1a1a1a;
   --text: #d4d4d4;
   --dim: #5a5a5a;
-  --muted: #333;
+  --muted: #2a2a2a;
   --red: #d63031;
   --amber: #e17055;
   --teal: #00b894;
   --purple: #a29bfe;
+  --blue: #74b9ff;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{background:var(--bg);color:var(--text);font-family:'Instrument Sans',sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh}
 
 /* NAV */
-nav{position:fixed;top:0;width:100%;z-index:100;padding:0 48px;height:56px;display:flex;align-items:center;justify-content:space-between;background:rgba(6,6,6,0.9);backdrop-filter:blur(24px);border-bottom:1px solid var(--border)}
+nav{position:fixed;top:0;width:100%;z-index:100;padding:0 48px;height:56px;display:flex;align-items:center;justify-content:space-between;background:rgba(6,6,6,0.95);backdrop-filter:blur(24px);border-bottom:1px solid var(--border)}
 .logo{font-size:11px;letter-spacing:5px;color:var(--dim);font-weight:600;text-decoration:none}
 .logo b{color:var(--red)}
 .nav-r{display:flex;align-items:center;gap:20px}
 .nav-avatar{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);object-fit:cover;cursor:pointer}
 .nav-avatar-placeholder{width:28px;height:28px;border-radius:50%;background:var(--muted);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--dim);cursor:pointer}
-.nav-sign-out{font-size:10px;letter-spacing:1.5px;color:var(--dim);background:none;border:none;cursor:pointer;font-family:inherit;font-weight:500;transition:color 0.2s}
+.nav-sign-out{font-size:10px;letter-spacing:1.5px;color:var(--dim);background:none;border:none;cursor:pointer;font-family:inherit;font-weight:500;transition:color .2s}
 .nav-sign-out:hover{color:var(--red)}
 
 /* LAYOUT */
-.page{padding:88px 48px 64px;max-width:1100px;margin:0 auto}
+.page{padding:88px 48px 80px;max-width:1120px;margin:0 auto}
 
 /* GREETING */
-.greeting{margin-bottom:56px}
-.greeting-eyebrow{font-size:10px;letter-spacing:4px;color:var(--dim);font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.greeting{margin-bottom:52px}
+.greeting-eyebrow{font-size:10px;letter-spacing:4px;color:var(--dim);font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:12px}
 .greeting-eyebrow::before{content:'';width:24px;height:1px;background:var(--red)}
-.greeting h1{font-family:'DM Serif Display',serif;font-size:clamp(32px,4vw,52px);font-weight:400;line-height:1.1}
+.greeting h1{font-family:'DM Serif Display',serif;font-size:clamp(32px,4vw,50px);font-weight:400;line-height:1.1}
 .greeting h1 i{color:var(--red);font-style:italic}
-.greeting-sub{font-size:14px;color:var(--dim);margin-top:12px;line-height:1.6;max-width:480px}
-
-/* STATUS BADGE */
-.status-row{display:flex;align-items:center;gap:10px;margin-top:20px}
-.badge{display:inline-flex;align-items:center;gap:7px;font-size:10px;letter-spacing:1.5px;font-weight:600;padding:6px 14px;border:1px solid;cursor:default}
+.greeting-sub{font-size:13px;color:var(--dim);margin-top:10px;line-height:1.7;max-width:460px}
+.status-row{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:7px;font-size:10px;letter-spacing:1.5px;font-weight:600;padding:5px 12px;border:1px solid;cursor:default}
 .badge-access{border-color:var(--teal);color:var(--teal)}
 .badge-dot{width:5px;height:5px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .badge-member{border-color:var(--border);color:var(--dim)}
+.member-count-badge{font-size:10px;letter-spacing:.5px;color:var(--dim)}
+.member-count-badge b{color:var(--text)}
 
-/* GRID */
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:1px}
-.grid-wide{display:grid;grid-template-columns:2fr 1fr;gap:1px;background:var(--border);margin-bottom:1px}
-.card{background:var(--bg);padding:32px;position:relative;overflow:hidden}
-.card-label{font-size:9px;letter-spacing:3px;color:var(--dim);font-weight:600;margin-bottom:20px;display:flex;align-items:center;gap:10px}
+/* GRID SYSTEM */
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);margin-bottom:1px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:1px}
+.grid-wide{display:grid;grid-template-columns:1.6fr 1fr;gap:1px;background:var(--border);margin-bottom:1px}
+.card{background:var(--bg);padding:30px;position:relative;overflow:hidden}
+.card-label{font-size:9px;letter-spacing:3px;color:var(--dim);font-weight:600;margin-bottom:18px;display:flex;align-items:center;gap:10px}
 .card-label::after{content:'';flex:1;height:1px;background:var(--border)}
-.card h2{font-family:'DM Serif Display',serif;font-size:28px;font-weight:400;margin-bottom:8px;line-height:1.2}
-.card-desc{font-size:13px;color:var(--dim);line-height:1.65}
+.card h2{font-family:'DM Serif Display',serif;font-size:26px;font-weight:400;margin-bottom:8px;line-height:1.2}
+.card-desc{font-size:12px;color:var(--dim);line-height:1.65}
 
-/* NAME YOUR AI */
-.name-input-wrap{margin-top:20px;position:relative}
-.name-input{width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:20px;font-family:'DM Serif Display',serif;padding:14px 16px;outline:none;transition:border-color 0.2s;font-weight:400}
+/* NAME INPUT */
+.name-input-wrap{margin-top:18px}
+.name-input{width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:22px;font-family:'DM Serif Display',serif;padding:12px 16px;outline:none;transition:border-color .2s}
 .name-input::placeholder{color:var(--muted);font-family:'DM Serif Display',serif}
 .name-input:focus{border-color:var(--red)}
-.name-input-hint{font-size:10px;color:var(--muted);margin-top:8px;letter-spacing:0.5px}
-.name-save{margin-top:12px;padding:10px 24px;background:none;border:1px solid var(--border);color:var(--dim);font-size:10px;letter-spacing:1.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.2s}
+.name-input-hint{font-size:10px;color:var(--muted);margin-top:7px;letter-spacing:.5px}
+.name-save{margin-top:10px;padding:9px 22px;background:none;border:1px solid var(--border);color:var(--dim);font-size:10px;letter-spacing:1.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s}
 .name-save:hover{border-color:var(--red);color:var(--red)}
-.name-saved{display:none;font-size:10px;color:var(--teal);letter-spacing:1px;margin-top:10px}
+.name-saved{display:none;font-size:10px;color:var(--teal);letter-spacing:1px;margin-top:8px}
 
 /* COUNTDOWN */
-.countdown{display:flex;gap:0;margin-top:4px}
-.count-block{text-align:center;padding:16px 20px;border-right:1px solid var(--border)}
+.countdown{display:flex;margin-top:6px}
+.count-block{text-align:center;padding:14px 18px;border-right:1px solid var(--border)}
 .count-block:last-child{border-right:none}
-.count-num{font-family:'DM Serif Display',serif;font-size:40px;font-weight:400;line-height:1;color:var(--text)}
-.count-label{font-size:8px;letter-spacing:2.5px;color:var(--dim);font-weight:600;margin-top:6px}
-.countdown-target{font-size:10px;color:var(--muted);letter-spacing:1px;margin-top:16px}
+.count-num{font-family:'DM Serif Display',serif;font-size:38px;font-weight:400;line-height:1;color:var(--text)}
+.count-label{font-size:8px;letter-spacing:2.5px;color:var(--dim);font-weight:600;margin-top:5px}
+.countdown-target{font-size:10px;color:var(--muted);letter-spacing:1px;margin-top:14px}
 .countdown-target b{color:var(--dim)}
 
-/* WHAT'S COMING */
-.features-list{margin-top:4px;display:flex;flex-direction:column;gap:0}
-.feature-item{display:flex;align-items:flex-start;gap:16px;padding:16px 0;border-bottom:1px solid var(--border)}
-.feature-item:last-child{border-bottom:none}
-.feature-icon{width:32px;height:32px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;margin-top:2px}
-.feature-name{font-size:12px;font-weight:600;letter-spacing:0.5px;margin-bottom:3px}
-.feature-desc{font-size:11px;color:var(--dim);line-height:1.55}
-.feature-tag{display:inline-block;font-size:8px;letter-spacing:1.5px;color:var(--purple);border:1px solid rgba(162,155,254,0.3);padding:2px 7px;margin-top:5px;font-weight:600}
-.feature-tag.soon{color:var(--amber);border-color:rgba(225,112,85,0.3)}
-.feature-tag.beta{color:var(--teal);border-color:rgba(0,184,148,0.3)}
+/* VOTE SECTION */
+.vote-list{display:flex;flex-direction:column;gap:12px;margin-top:4px}
+.vote-item{cursor:pointer}
+.vote-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.vote-btn{display:flex;align-items:center;gap:10px;background:none;border:none;cursor:pointer;font-family:inherit;padding:0;width:100%;text-align:left}
+.vote-icon{width:28px;height:28px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;transition:border-color .2s}
+.vote-label{font-size:12px;font-weight:600;color:var(--text);transition:color .2s}
+.vote-count{font-size:10px;color:var(--dim);letter-spacing:.5px}
+.vote-bar-wrap{height:2px;background:var(--muted);border-radius:2px;overflow:hidden}
+.vote-bar{height:100%;background:var(--border);border-radius:2px;width:0;transition:width .6s ease, background .3s}
+.vote-btn.voted .vote-icon{border-color:var(--red)}
+.vote-btn.voted .vote-label{color:var(--red)}
+.vote-btn.voted + .vote-count{color:var(--red)}
+.vote-btn.voted ~ .vote-bar-wrap .vote-bar{background:var(--red)}
 
-/* SHARE */
-.share-wrap{margin-top:20px}
-.share-url{background:var(--surface);border:1px solid var(--border);padding:12px 16px;font-size:11px;color:var(--dim);font-family:'Instrument Sans',monospace;letter-spacing:0.5px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.share-copy{font-size:9px;letter-spacing:1.5px;color:var(--dim);background:none;border:1px solid var(--border);padding:6px 12px;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.2s;flex-shrink:0}
-.share-copy:hover{border-color:var(--text);color:var(--text)}
-.share-copy.copied{color:var(--teal);border-color:var(--teal)}
-.share-desc{font-size:11px;color:var(--dim);margin-top:12px;line-height:1.6}
+/* CHAT */
+.chat-wrap{display:flex;flex-direction:column;height:100%;min-height:320px}
+.chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;margin-bottom:12px;max-height:260px;padding-right:4px}
+.chat-messages::-webkit-scrollbar{width:3px}
+.chat-messages::-webkit-scrollbar-track{background:transparent}
+.chat-messages::-webkit-scrollbar-thumb{background:var(--border)}
+.msg{display:flex;gap:10px;align-items:flex-start}
+.msg-avatar{width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;margin-top:1px}
+.msg-kaira{background:var(--red);color:#fff}
+.msg-user{background:var(--muted);color:var(--dim);margin-left:auto}
+.msg.user-msg{flex-direction:row-reverse}
+.msg-bubble{font-size:12px;line-height:1.6;max-width:85%;color:var(--text)}
+.msg.user-msg .msg-bubble{color:var(--dim);text-align:right}
+.msg-name{font-size:9px;letter-spacing:1.5px;color:var(--dim);font-weight:600;margin-bottom:3px}
+.msg.user-msg .msg-name{text-align:right}
+.typing-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--dim);animation:typing-bounce .8s infinite;margin-right:3px}
+.typing-dot:nth-child(2){animation-delay:.15s}
+.typing-dot:nth-child(3){animation-delay:.3s;margin-right:0}
+@keyframes typing-bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-4px)}}
+.chat-input-row{display:flex;gap:8px;border-top:1px solid var(--border);padding-top:12px;margin-top:auto}
+.chat-input{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:12px;font-family:inherit;padding:9px 12px;outline:none;transition:border-color .2s;resize:none;height:38px}
+.chat-input:focus{border-color:var(--red)}
+.chat-send{padding:0 16px;background:none;border:1px solid var(--border);color:var(--dim);font-size:9px;letter-spacing:1.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;height:38px;flex-shrink:0}
+.chat-send:hover{border-color:var(--red);color:var(--red)}
+.chat-hint{font-size:10px;color:var(--muted);margin-bottom:10px;line-height:1.5}
+
+/* SHARE / REFERRAL */
+.ref-link-box{background:var(--surface);border:1px solid var(--border);padding:11px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px}
+.ref-link-text{font-size:10px;color:var(--dim);font-family:monospace;letter-spacing:.3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.copy-btn{font-size:9px;letter-spacing:1.5px;color:var(--dim);background:none;border:1px solid var(--border);padding:5px 11px;cursor:pointer;font-family:inherit;font-weight:600;transition:all .2s;flex-shrink:0}
+.copy-btn:hover{border-color:var(--text);color:var(--text)}
+.copy-btn.copied{color:var(--teal);border-color:var(--teal)}
+.ref-desc{font-size:11px;color:var(--dim);margin-top:10px;line-height:1.6}
+
+/* PROFILE */
+.profile-card{display:flex;align-items:center;gap:14px;padding:16px;background:var(--surface);border:1px solid var(--border);margin-top:4px}
+.profile-img{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid var(--border)}
+.profile-img-placeholder{width:44px;height:44px;border-radius:50%;background:var(--muted);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;color:var(--dim);border:1px solid var(--border)}
+.profile-name{font-size:13px;font-weight:600;margin-bottom:2px}
+.profile-email{font-size:10px;color:var(--dim)}
 
 /* TIMELINE */
 .timeline{margin-top:4px}
-.tl-item{display:flex;gap:20px;padding:14px 0;border-bottom:1px solid var(--border);position:relative}
+.tl-item{display:flex;gap:16px;padding:12px 0;border-bottom:1px solid var(--border)}
 .tl-item:last-child{border-bottom:none}
-.tl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.tl-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:5px}
 .tl-dot.done{background:var(--teal)}
-.tl-dot.active{background:var(--red);box-shadow:0 0 8px rgba(214,48,49,0.5);animation:pulse 2s infinite}
+.tl-dot.active{background:var(--red);box-shadow:0 0 8px rgba(214,48,49,.5);animation:pulse 2s infinite}
 .tl-dot.upcoming{background:var(--muted)}
-.tl-date{font-size:9px;letter-spacing:2px;color:var(--dim);font-weight:600;width:72px;flex-shrink:0;margin-top:4px}
-.tl-title{font-size:12px;font-weight:600;margin-bottom:3px}
-.tl-desc{font-size:11px;color:var(--dim);line-height:1.5}
+.tl-date{font-size:9px;letter-spacing:1.5px;color:var(--dim);font-weight:600;width:68px;flex-shrink:0;margin-top:3px}
+.tl-title{font-size:11px;font-weight:600;margin-bottom:2px}
+.tl-desc{font-size:10px;color:var(--dim);line-height:1.5}
 
-/* PROFILE CARD */
-.profile-card{display:flex;align-items:center;gap:16px;padding:20px;background:var(--surface);border:1px solid var(--border);margin-top:20px}
-.profile-img{width:48px;height:48px;border-radius:50%;object-fit:cover;border:1px solid var(--border)}
-.profile-img-placeholder{width:48px;height:48px;border-radius:50%;background:var(--muted);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;color:var(--dim);border:1px solid var(--border)}
-.profile-name{font-size:14px;font-weight:600;margin-bottom:3px}
-.profile-email{font-size:11px;color:var(--dim)}
-
-/* GLOW accents */
-.card-glow{position:absolute;width:200px;height:200px;border-radius:50%;pointer-events:none;opacity:0.04;filter:blur(60px)}
+/* GLOW */
+.card-glow{position:absolute;width:180px;height:180px;border-radius:50%;pointer-events:none;opacity:.04;filter:blur(50px)}
 .glow-red{background:var(--red);bottom:-60px;right:-60px}
 .glow-teal{background:var(--teal);top:-60px;left:-60px}
 .glow-purple{background:var(--purple);bottom:-40px;left:-40px}
+.glow-blue{background:var(--blue);top:-40px;right:-40px}
 
-/* LOADING STATE */
-#loading{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity 0.4s}
+/* LOADING */
+#loading{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity .4s}
 #loading.hidden{opacity:0;pointer-events:none}
 .load-logo{font-size:11px;letter-spacing:5px;color:var(--dim);font-weight:600}
 .load-logo b{color:var(--red)}
 
-/* RESPONSIVE */
-@media(max-width:768px){
-  .page{padding:80px 20px 48px}
+@media(max-width:900px){
+  .grid-3{grid-template-columns:1fr}
+  .grid-wide{grid-template-columns:1fr}
+  .grid-2{grid-template-columns:1fr}
+}
+@media(max-width:640px){
+  .page{padding:76px 20px 60px}
   nav{padding:0 20px}
-  .grid,.grid-wide{grid-template-columns:1fr}
   .countdown{justify-content:flex-start}
-  .count-block{padding:14px 16px}
-  .count-num{font-size:32px}
+  .count-block{padding:12px 14px}
+  .count-num{font-size:30px}
 }
 </style>
 </head>
 <body>
 
-<!-- Loading overlay -->
 <div id="loading"><span class="load-logo">PRO<b>K</b>AIRA</span></div>
 
-<!-- Nav -->
 <nav>
   <a href="/" class="logo">PRO<b>J</b>ECT KAIRA</a>
   <div class="nav-r">
@@ -183,35 +696,30 @@ nav{position:fixed;top:0;width:100%;z-index:100;padding:0 48px;height:56px;displ
   </div>
 </nav>
 
-<!-- Dashboard -->
 <div class="page" id="dashboard" style="display:none">
 
   <!-- Greeting -->
   <div class="greeting">
     <div class="greeting-eyebrow">EARLY ACCESS MEMBER</div>
     <h1>Welcome back,<br><i id="firstName">there</i>.</h1>
-    <p class="greeting-sub">You're among the first to join KAIRA — a personal AI that actually knows you. Here's your access dashboard.</p>
+    <p class="greeting-sub">You're among the first to build with KAIRA — a personal AI that knows you. Here's your dashboard.</p>
     <div class="status-row">
       <span class="badge badge-access"><span class="badge-dot"></span>EARLY ACCESS</span>
       <span class="badge badge-member" id="memberBadge">MEMBER #—</span>
+      <span class="member-count-badge"><b id="memberCount">—</b> people have joined</span>
     </div>
   </div>
 
-  <!-- Row 1: Name your AI + Countdown -->
-  <div class="grid-wide">
+  <!-- Row 1: Name your AI + Countdown + Chat -->
+  <div class="grid-3">
 
-    <!-- Name your AI -->
+    <!-- AI Name (set during onboarding) -->
     <div class="card">
       <div class="card-glow glow-red"></div>
-      <div class="card-label">NAME YOUR AI</div>
-      <h2>What will you<br>call yours?</h2>
-      <p class="card-desc">Every KAIRA is yours alone. Give it a name — one that feels right. It'll answer to it forever.</p>
-      <div class="name-input-wrap">
-        <input class="name-input" id="aiName" type="text" placeholder="e.g. Aria, Nova, Max…" maxlength="24" autocomplete="off">
-        <p class="name-input-hint">Up to 24 characters. You can always change it before launch.</p>
-        <button class="name-save" onclick="saveName()">SAVE NAME</button>
-        <p class="name-saved" id="nameSaved">✓ Saved — see you at launch.</p>
-      </div>
+      <div class="card-label">YOUR AI</div>
+      <h2 id="aiNameDisplay" style="font-size:clamp(28px,4vw,48px);letter-spacing:-1px">—</h2>
+      <p class="card-desc">Your AI's name was set during setup. It's yours alone.</p>
+      <p class="name-saved" style="display:block;margin-top:4px" id="nameSaved">Change it in settings after launch.</p>
     </div>
 
     <!-- Countdown -->
@@ -225,190 +733,227 @@ nav{position:fixed;top:0;width:100%;z-index:100;padding:0 48px;height:56px;displ
         <div class="count-block"><div class="count-num" id="cd-s">—</div><div class="count-label">SEC</div></div>
       </div>
       <p class="countdown-target">Until <b>Beta — May 2026</b></p>
-      <p class="card-desc" style="margin-top:16px;font-size:12px">As an early member, you'll be in the first wave. No waitlist, no lottery — just access.</p>
+      <p class="card-desc" style="margin-top:14px;font-size:11px">First wave access. No waitlist, no lottery — just your spot.</p>
+
+      <div style="margin-top:24px">
+        <div class="card-label">ROADMAP</div>
+        <div class="timeline">
+          <div class="tl-item">
+            <div class="tl-dot done"></div>
+            <div class="tl-date">MAR 2026</div>
+            <div><div class="tl-title">Early Access</div><div class="tl-desc">Signups open.</div></div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot active"></div>
+            <div class="tl-date">MAY 2026</div>
+            <div><div class="tl-title">Beta Launch</div><div class="tl-desc">iOS + Android, first members in.</div></div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot upcoming"></div>
+            <div class="tl-date">SEPT 2026</div>
+            <div><div class="tl-title">Public Launch</div><div class="tl-desc">$5–10/month for everyone.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat — real Ana relay -->
+    <div class="card" style="display:flex;flex-direction:column">
+      <div class="card-glow glow-purple"></div>
+      <div class="card-label" id="chatLabel">YOUR AI</div>
+      <div class="chat-hint" id="chatHint">Talk directly to your AI. Responses come from Ana running on your machine.</div>
+      <div class="chat-wrap">
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-row">
+          <input class="chat-input" id="chatInput" placeholder="Ask your AI something…"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg()}">
+          <button class="chat-send" onclick="sendChatMsg()">SEND</button>
+        </div>
+      </div>
     </div>
 
   </div>
 
-  <!-- Row 2: What's coming + Timeline -->
-  <div class="grid">
+  <!-- Row 2: Vote + Profile + Invite -->
+  <div class="grid-wide">
 
-    <!-- Features -->
+    <!-- Feature vote -->
     <div class="card">
-      <div class="card-glow glow-purple"></div>
-      <div class="card-label">WHAT'S COMING</div>
-      <div class="features-list">
-        <div class="feature-item">
-          <div class="feature-icon">🧠</div>
-          <div>
-            <div class="feature-name">Persistent Memory</div>
-            <div class="feature-desc">Your AI remembers everything — conversations, decisions, preferences — and gets smarter every week.</div>
-            <span class="feature-tag beta">IN BETA</span>
+      <div class="card-glow glow-blue"></div>
+      <div class="card-label">SHAPE THE PRODUCT</div>
+      <h2>What do you want<br>built first?</h2>
+      <p class="card-desc" style="margin-bottom:20px">Your vote directly influences our roadmap. One vote per member — change it anytime.</p>
+
+      <div class="vote-list">
+
+        <div class="vote-item">
+          <div class="vote-header">
+            <button class="vote-btn" data-feature="memory" onclick="window._castVote('memory')">
+              <div class="vote-icon">🧠</div>
+              <div class="vote-label">Persistent Memory</div>
+            </button>
+            <span class="vote-count" id="vote-count-memory">—</span>
           </div>
+          <div class="vote-bar-wrap"><div class="vote-bar" id="vote-bar-memory"></div></div>
         </div>
-        <div class="feature-item">
-          <div class="feature-icon">🎙️</div>
-          <div>
-            <div class="feature-name">Voice-First Interface</div>
-            <div class="feature-desc">Talk to your AI naturally. It knows your tone, your pace, your context.</div>
-            <span class="feature-tag soon">COMING SOON</span>
+
+        <div class="vote-item">
+          <div class="vote-header">
+            <button class="vote-btn" data-feature="voice" onclick="window._castVote('voice')">
+              <div class="vote-icon">🎙️</div>
+              <div class="vote-label">Voice-First Interface</div>
+            </button>
+            <span class="vote-count" id="vote-count-voice">—</span>
           </div>
+          <div class="vote-bar-wrap"><div class="vote-bar" id="vote-bar-voice"></div></div>
         </div>
-        <div class="feature-item">
-          <div class="feature-icon">📱</div>
-          <div>
-            <div class="feature-name">On-Device Intelligence</div>
-            <div class="feature-desc">Runs locally on your phone. Your data never leaves your device without permission.</div>
-            <span class="feature-tag">PLANNED</span>
+
+        <div class="vote-item">
+          <div class="vote-header">
+            <button class="vote-btn" data-feature="ondevice" onclick="window._castVote('ondevice')">
+              <div class="vote-icon">📱</div>
+              <div class="vote-label">On-Device Intelligence</div>
+            </button>
+            <span class="vote-count" id="vote-count-ondevice">—</span>
           </div>
+          <div class="vote-bar-wrap"><div class="vote-bar" id="vote-bar-ondevice"></div></div>
         </div>
-        <div class="feature-item">
-          <div class="feature-icon">⚡</div>
-          <div>
-            <div class="feature-name">Proactive Mode</div>
-            <div class="feature-desc">Your AI acts before you ask — morning briefings, task nudges, pattern insights.</div>
-            <span class="feature-tag soon">COMING SOON</span>
+
+        <div class="vote-item">
+          <div class="vote-header">
+            <button class="vote-btn" data-feature="proactive" onclick="window._castVote('proactive')">
+              <div class="vote-icon">⚡</div>
+              <div class="vote-label">Proactive Mode</div>
+            </button>
+            <span class="vote-count" id="vote-count-proactive">—</span>
           </div>
+          <div class="vote-bar-wrap"><div class="vote-bar" id="vote-bar-proactive"></div></div>
         </div>
+
       </div>
     </div>
 
-    <!-- Timeline + Profile + Share -->
+    <!-- Profile + Invite -->
     <div class="card" style="display:flex;flex-direction:column;gap:0">
-      <div class="card-label">ROADMAP</div>
-      <div class="timeline">
-        <div class="tl-item">
-          <div class="tl-dot done"></div>
-          <div class="tl-date">MAR 2026</div>
-          <div><div class="tl-title">Early Access Opens</div><div class="tl-desc">Landing page live, signups open.</div></div>
-        </div>
-        <div class="tl-item">
-          <div class="tl-dot active"></div>
-          <div class="tl-date">MAY 2026</div>
-          <div><div class="tl-title">Beta Launch</div><div class="tl-desc">Early members get first access. iOS + Android.</div></div>
-        </div>
-        <div class="tl-item">
-          <div class="tl-dot upcoming"></div>
-          <div class="tl-date">SEPT 2026</div>
-          <div><div class="tl-title">Public Launch</div><div class="tl-desc">KAIRA opens to everyone. $5–10/month.</div></div>
-        </div>
-      </div>
 
-      <div style="margin-top:28px">
+      <div>
         <div class="card-label">YOUR PROFILE</div>
         <div class="profile-card">
           <div id="profileImg" class="profile-img-placeholder">?</div>
-          <div>
+          <div style="flex:1">
             <div class="profile-name" id="profileName">—</div>
             <div class="profile-email" id="profileEmail">—</div>
           </div>
+          <a href="/memory-import" style="font-size:10px;letter-spacing:1.5px;color:var(--dim);text-decoration:none;font-weight:600;transition:color .2s;flex-shrink:0;align-self:center" onmouseover="this.style.color='var(--teal)'" onmouseout="this.style.color='var(--dim)'">IMPORT MEMORIES →</a>
         </div>
       </div>
 
       <div style="margin-top:28px">
         <div class="card-label">INVITE A FRIEND</div>
-        <div class="share-url">
-          <span>projectkaira.ca</span>
-          <button class="share-copy" id="copyBtn" onclick="copyLink()">COPY</button>
+        <p class="card-desc">Your unique link. When someone joins through it, you both move up the list.</p>
+        <div class="ref-link-box">
+          <span class="ref-link-text" id="refLink">loading…</span>
+          <button class="copy-btn" id="copyBtn" onclick="copyRefLink()">COPY</button>
         </div>
-        <p class="share-desc">Know someone who'd want their own AI? Send them the link — the earlier they join, the better their access.</p>
+        <p class="ref-desc">Share with someone who'd want their own AI. The earlier they join, the better.</p>
       </div>
+
     </div>
 
+  </div>
+
+  <!-- Memory Profile Card -->
+  <div id="memoryProfileCard" style="display:none;background:var(--bg);border:1px solid var(--border);margin-top:1px">
+    <div style="padding:20px 20px 0">
+      <div class="card-label">YOUR MEMORY PROFILE</div>
+    </div>
+    <div id="memoryProfileBody"></div>
+  </div>
+
+  <!-- Notes Card -->
+  <div id="notesCard" style="background:var(--bg);border:1px solid var(--border);margin-top:1px">
+    <div style="padding:20px 20px 12px;display:flex;justify-content:space-between;align-items:center">
+      <div class="card-label">NOTES</div>
+      <button onclick="toggleNoteInput()" style="font-family:var(--font);font-size:10px;letter-spacing:.08em;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 10px;cursor:pointer">+ NEW</button>
+    </div>
+    <div id="noteInputArea" style="display:none;padding:0 20px 16px">
+      <textarea id="noteText" placeholder="Type a note or press mic…"
+        style="width:100%;min-height:80px;background:#0a0a0a;border:1px solid var(--border);color:var(--fg);font-family:var(--font);font-size:13px;padding:10px;resize:vertical;box-sizing:border-box;outline:none;line-height:1.5"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <button onclick="saveNote()" style="font-family:var(--font);font-size:11px;letter-spacing:.08em;background:var(--accent);color:#fff;border:none;padding:8px 18px;cursor:pointer">SAVE</button>
+        <button id="btnMic" onclick="toggleDictation()" style="font-family:var(--font);font-size:11px;letter-spacing:.08em;background:none;border:1px solid var(--border);color:var(--muted);padding:8px 14px;cursor:pointer">🎤 DICTATE</button>
+        <button onclick="toggleNoteInput()" style="font-family:var(--font);font-size:11px;background:none;border:none;color:var(--muted);cursor:pointer;padding:8px 4px">CANCEL</button>
+      </div>
+      <div id="dictStatus" style="font-size:11px;color:var(--muted);margin-top:6px;display:none;letter-spacing:.04em">● LISTENING…</div>
+    </div>
+    <div id="notesList"></div>
+    <div id="notesEmpty" style="padding:16px 20px 20px;color:var(--muted);font-size:12px;letter-spacing:.06em">NO NOTES YET. HIT + NEW TO START.</div>
+  </div>
+
+  <!-- ANA'S UPDATES — proactive notification panel -->
+  <div id="notifCard" style="background:var(--bg);border:1px solid var(--border);margin-top:1px">
+    <div style="padding:20px 20px 0;display:flex;justify-content:space-between;align-items:center">
+      <div class="card-label" style="display:flex;align-items:center;gap:8px">
+        ANA'S UPDATES
+        <span id="notifBadge" style="display:none;background:var(--accent);color:#fff;font-size:9px;padding:2px 7px;border-radius:2px;letter-spacing:.05em">0</span>
+      </div>
+    </div>
+    <div id="notifList" style="max-height:360px;overflow-y:auto"></div>
+    <div id="notifEmpty" style="padding:16px 20px 20px;color:var(--muted);font-size:12px;letter-spacing:.05em">NO UPDATES YET.</div>
   </div>
 
 </div><!-- /page -->
 
 <script>
-function initDashboard(user) {
-  // Hide loading, show dashboard
-  document.getElementById('loading').classList.add('hidden');
-  document.getElementById('dashboard').style.display = 'block';
-
-  // Name
-  const first = (user.displayName || 'there').split(' ')[0];
-  document.getElementById('firstName').textContent = first;
-  document.getElementById('profileName').textContent = user.displayName || '—';
-  document.getElementById('profileEmail').textContent = user.email || '—';
-
-  // Avatar in nav
-  const navAv = document.getElementById('navAvatar');
-  if (user.photoURL) {
-    navAv.outerHTML = `<img id="navAvatar" class="nav-avatar" src="${user.photoURL}" alt="${first}">`;
-  } else {
-    navAv.textContent = first[0].toUpperCase();
-  }
-
-  // Profile image
-  const profImg = document.getElementById('profileImg');
-  if (user.photoURL) {
-    profImg.outerHTML = `<img id="profileImg" class="profile-img" src="${user.photoURL}" alt="${first}">`;
-  } else {
-    profImg.textContent = first[0].toUpperCase();
-  }
-
-  // Member number — deterministic from uid
-  const num = Math.abs(hashCode(user.uid)) % 9000 + 1000;
-  document.getElementById('memberBadge').textContent = `MEMBER #${num}`;
-
-  // Restore saved AI name
-  const saved = localStorage.getItem('kaira_ai_name_' + user.uid);
-  if (saved) document.getElementById('aiName').value = saved;
-
-  // Countdown
-  startCountdown();
-}
-
+// ── Utilities ────────────────────────────────────────────────
 function hashCode(str) {
   let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = Math.imul(31, h) + str.charCodeAt(i) | 0;
-  }
+  for (let i = 0; i < str.length; i++) h = Math.imul(31, h) + str.charCodeAt(i) | 0;
   return h;
-}
-
-function saveName() {
-  const val = document.getElementById('aiName').value.trim();
-  if (!val) return;
-  // Store locally (will sync to backend at launch)
-  const uid = window._uid || 'anon';
-  localStorage.setItem('kaira_ai_name_' + uid, val);
-  const saved = document.getElementById('nameSaved');
-  saved.style.display = 'block';
-  setTimeout(() => saved.style.display = 'none', 3000);
 }
 
 function startCountdown() {
   const target = new Date('2026-05-01T00:00:00');
   function tick() {
     const diff = target - Date.now();
-    if (diff <= 0) {
-      document.getElementById('cd-d').textContent = '0';
-      document.getElementById('cd-h').textContent = '0';
-      document.getElementById('cd-m').textContent = '0';
-      document.getElementById('cd-s').textContent = '0';
-      return;
-    }
-    const d = Math.floor(diff / 86400000);
-    const h = Math.floor((diff % 86400000) / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
+    const d = Math.max(0, Math.floor(diff / 86400000));
+    const h = Math.max(0, Math.floor((diff % 86400000) / 3600000));
+    const m = Math.max(0, Math.floor((diff % 3600000) / 60000));
+    const s = Math.max(0, Math.floor((diff % 60000) / 1000));
     document.getElementById('cd-d').textContent = String(d).padStart(2,'0');
     document.getElementById('cd-h').textContent = String(h).padStart(2,'0');
     document.getElementById('cd-m').textContent = String(m).padStart(2,'0');
     document.getElementById('cd-s').textContent = String(s).padStart(2,'0');
   }
-  tick();
-  setInterval(tick, 1000);
+  tick(); setInterval(tick, 1000);
 }
 
-function copyLink() {
-  navigator.clipboard.writeText('https://projectkaira.ca').then(() => {
+function copyRefLink() {
+  const link = window._refLink || 'https://projectkaira.ca';
+  navigator.clipboard.writeText(link).then(() => {
     const btn = document.getElementById('copyBtn');
-    btn.textContent = 'COPIED';
-    btn.classList.add('copied');
+    btn.textContent = 'COPIED'; btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 2000);
   });
+}
+
+// ── Typewriter effect ─────────────────────────────────────────
+function typewrite(el, text, i = 0) {
+  if (i < text.length) {
+    el.textContent += text[i];
+    el.closest('.chat-messages') && (el.closest('.chat-messages').scrollTop = 99999);
+    setTimeout(() => typewrite(el, text, i + 1), 18 + Math.random() * 14);
+  }
+}
+
+// ── Send message (calls Firebase module function) ────────────
+function sendChatMsg() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  // sendToAna is defined in the module script above
+  if (window._sendToAna) window._sendToAna(text);
 }
 </script>
 </body>

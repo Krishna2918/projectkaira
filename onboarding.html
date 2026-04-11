@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KAIRA — Set Up Your AI</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#060606">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup }
+    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp }
+    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+  const firebaseConfig = await fetch('/__/firebase/init.json').then(r => r.json());
+  firebaseConfig.authDomain = 'projectkaira.ca';
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  let currentUser = null;
+
+  onAuthStateChanged(auth, async user => {
+    if (!user) { window.location.href = '/'; return; }
+    currentUser = user;
+    window.currentUser = user;
+
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    if (snap.exists() && snap.data().onboardingComplete === true) {
+      window.location.href = '/dashboard';
+      return;
+    }
+
+    const saved = snap.exists() ? (snap.data().aiName || '') : '';
+    if (saved) {
+      document.getElementById('aiNameInput').value = saved;
+      answers.name = saved;
+      const lbl = document.getElementById('btnGiveLabel');
+      if (lbl) lbl.textContent = `GIVE TO ${saved.toUpperCase()}`;
+    }
+
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('onboarding').style.display = 'flex';
+  });
+
+  window._saveProfile = async (answers) => {
+    if (!currentUser) return;
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      aiName: answers.name,
+      focus: answers.focus,
+      communicationStyle: answers.style,
+      personality: answers.personality || 'none',
+    }, { merge: true });
+  };
+
+  window._saveMemories = async (raw, structured) => {
+    if (!currentUser) return;
+    await updateDoc(doc(db, 'users', currentUser.uid), {
+      memoryImport: {
+        raw,
+        structured,
+        importedAt: serverTimestamp(),
+        processed: false,
+      }
+    });
+  };
+
+  window._completeOnboarding = async () => {
+    if (!currentUser) return;
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      onboardingComplete: true,
+      onboardedAt: serverTimestamp(),
+    }, { merge: true });
+    window.location.href = '/dashboard';
+  };
+
+  window._connectWorkspace = async () => {
+    const provider = new GoogleAuthProvider();
+    // All connectable Google services in one consent screen
+    const scopes = [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/contacts.readonly',
+      'https://www.googleapis.com/auth/photoslibrary.readonly',
+      'https://www.googleapis.com/auth/documents.readonly',
+      'https://www.googleapis.com/auth/spreadsheets.readonly',
+      'https://www.googleapis.com/auth/presentations.readonly',
+      'https://www.googleapis.com/auth/tasks.readonly',
+      'https://www.googleapis.com/auth/chat.messages.readonly',
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/memento',
+      'https://www.googleapis.com/auth/reminders',
+    ];
+    scopes.forEach(s => provider.addScope(s));
+    provider.setCustomParameters({ prompt: 'consent', access_type: 'offline' });
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken;
+
+    if (!accessToken) throw new Error('No access token returned');
+
+    await updateDoc(doc(db, 'users', currentUser.uid), {
+      googleWorkspace: {
+        connected: true,
+        connectedAt: serverTimestamp(),
+        accessToken,
+        tokenExpiry: Date.now() + 3500 * 1000,
+        scopes,
+      }
+    });
+    return accessToken;
+  };
+
+  // Try to fetch Keep notes via internal memento scope — silent fail if Workspace restriction applies
+  window._fetchKeepNotes = async (accessToken, uid) => {
+    try {
+      const res = await fetch('https://notes.googleapis.com/v1/notes?pageSize=200', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const notes = (data.notes || [])
+        .filter(n => !n.trashed)
+        .map(n => ({
+          id: n.name,
+          title: n.title || '',
+          body: n.body?.text?.text || '',
+          created: n.createTime,
+          updated: n.updateTime,
+        }));
+      await updateDoc(doc(db, 'users', uid), {
+        'keepNotes.imported': true,
+        'keepNotes.importedAt': serverTimestamp(),
+        'keepNotes.count': notes.length,
+        'keepNotes.notes': notes.slice(0, 500),
+      });
+      return notes.length;
+    } catch { return null; }
+  };
+</script>
+
+<style>
+:root {
+  --bg: #060606;
+  --surface: #0c0c0c;
+  --border: #1a1a1a;
+  --text: #d4d4d4;
+  --dim: #5a5a5a;
+  --muted: #2a2a2a;
+  --red: #d63031;
+  --teal: #00b894;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:'Instrument Sans',sans-serif;-webkit-font-smoothing:antialiased}
+
+#loading{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity .4s}
+#loading.hidden{opacity:0;pointer-events:none}
+.load-logo{font-size:11px;letter-spacing:5px;color:var(--dim);font-weight:600}
+.load-logo b{color:var(--red)}
+
+/* BRAIN OVERLAY */
+#brainOverlay{position:fixed;inset:0;background:#060606;z-index:9999;display:none;overflow:hidden}
+#brainCanvas{position:absolute;inset:0;width:100%;height:100%}
+
+#onboarding{display:none;flex-direction:column;min-height:100vh;align-items:center;justify-content:center;padding:40px 20px}
+
+/* PROGRESS */
+.progress-wrap{display:flex;align-items:center;gap:8px;margin-bottom:56px}
+.progress-step{width:32px;height:2px;background:var(--muted);transition:background .4s}
+.progress-step.done{background:var(--teal)}
+.progress-step.active{background:var(--red)}
+.progress-label{font-size:9px;letter-spacing:3px;color:var(--dim);font-weight:600;margin-left:8px}
+
+/* STEP CONTAINER */
+.steps-outer{width:100%;max-width:580px;position:relative;overflow:hidden}
+.step{position:absolute;top:0;left:0;width:100%;opacity:0;transform:translateX(40px);transition:all .4s cubic-bezier(.4,0,.2,1);pointer-events:none}
+.step.active{position:relative;opacity:1;transform:translateX(0);pointer-events:all}
+.step.out{opacity:0;transform:translateX(-40px);pointer-events:none}
+
+.step-eyebrow{font-size:9px;letter-spacing:4px;color:var(--dim);font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.step-eyebrow::before{content:'';width:20px;height:1px;background:var(--red)}
+.step h2{font-family:'DM Serif Display',serif;font-size:clamp(28px,5vw,44px);font-weight:400;line-height:1.15;margin-bottom:10px}
+.step h2 i{color:var(--red);font-style:italic}
+.step-sub{font-size:13px;color:var(--dim);line-height:1.65;margin-bottom:32px;max-width:420px}
+
+/* TEXT INPUT */
+.big-input{width:100%;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:28px;font-family:'DM Serif Display',serif;padding:10px 0 14px;outline:none;transition:border-color .2s;caret-color:var(--red)}
+.big-input::placeholder{color:var(--muted);font-family:'DM Serif Display',serif}
+.big-input:focus{border-bottom-color:var(--red)}
+.char-count{font-size:9px;color:var(--muted);text-align:right;margin-top:6px;letter-spacing:1px}
+
+/* SECTION DIVIDER LABELS */
+.section-label{font-size:9px;letter-spacing:3px;color:var(--dim);font-weight:600;margin:20px 0 10px;display:flex;align-items:center;gap:10px}
+.section-label::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* OPTION CARDS */
+.options{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.option{background:transparent;border:1px solid var(--border);padding:16px 18px;cursor:pointer;text-align:left;transition:all .2s;font-family:inherit;position:relative;overflow:hidden}
+.option:hover{border-color:var(--dim)}
+.option.selected{border-color:var(--red)}
+.option.selected::before{content:'';position:absolute;inset:0;background:var(--red);opacity:.04}
+.option-icon{font-size:18px;margin-bottom:8px;display:block}
+.option-title{font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px;letter-spacing:.3px}
+.option-desc{font-size:10px;color:var(--dim);line-height:1.5}
+.option-check{position:absolute;top:10px;right:12px;width:16px;height:16px;border:1px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;transition:all .2s}
+.option.selected .option-check{background:var(--red);border-color:var(--red);color:#fff}
+
+/* CTA */
+.step-footer{display:flex;align-items:center;justify-content:space-between;margin-top:28px}
+.btn-next{padding:12px 32px;background:var(--red);border:none;color:#fff;font-size:11px;letter-spacing:2px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .2s}
+.btn-next:hover{opacity:.85}
+.btn-next:disabled{opacity:.3;cursor:not-allowed}
+.btn-back{background:none;border:none;color:var(--dim);font-size:10px;letter-spacing:1.5px;cursor:pointer;font-family:inherit;font-weight:600;transition:color .2s;padding:0}
+.btn-back:hover{color:var(--text)}
+
+/* STEP 3 — IMPORT */
+.prompt-block{position:relative;background:var(--surface);border:1px solid var(--border);overflow:hidden;margin-bottom:24px}
+.prompt-label{font-size:9px;letter-spacing:3px;color:var(--dim);font-weight:600;padding:14px 20px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.prompt-label::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--red)}
+.copy-inline-btn{margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);font-size:9px;letter-spacing:2px;font-weight:700;padding:4px 12px;cursor:pointer;font-family:inherit;transition:all .2s;flex-shrink:0}
+.copy-inline-btn:hover{border-color:var(--text);color:var(--text)}
+.copy-inline-btn.copied{border-color:var(--teal);color:var(--teal)}
+.prompt-textarea{width:100%;background:transparent;border:none;color:var(--text);font-size:11.5px;font-family:'Courier New',monospace;line-height:1.75;padding:20px;outline:none;resize:none;min-height:280px;letter-spacing:.2px}
+.prompt-textarea::selection{background:rgba(214,48,49,.2)}
+.copy-row{display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:var(--surface)}
+.copy-main-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:9px 18px;background:none;border:1px solid var(--border);color:var(--dim);font-size:10px;letter-spacing:1.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s}
+.copy-main-btn:hover{border-color:var(--text);color:var(--text)}
+.copy-main-btn.copied{border-color:var(--teal);color:var(--teal)}
+
+/* PASTE PANELS */
+.paste-panels{display:flex;flex-direction:column;gap:1px;background:var(--border);margin-bottom:24px}
+.paste-panel{background:var(--bg);display:flex;flex-direction:column}
+.paste-header{padding:14px 20px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;transition:background .2s}
+.paste-header:hover{background:var(--surface)}
+.paste-header-left{display:flex;align-items:center;gap:10px}
+.paste-ai-dot{width:7px;height:7px;border-radius:50%}
+.dot-claude{background:#d97706}
+.dot-chatgpt{background:#10b981}
+.dot-gemini{background:#6366f1}
+.dot-life{background:#e11d48}
+.paste-ai-name{font-size:10px;letter-spacing:2px;font-weight:700;color:var(--dim)}
+.paste-char-count{font-size:9px;color:var(--muted)}
+.paste-filled{color:var(--teal) !important}
+.paste-toggle{font-size:9px;letter-spacing:1px;color:var(--dim);font-weight:600;transition:color .2s}
+.paste-header:hover .paste-toggle{color:var(--text)}
+.paste-body{overflow:hidden;max-height:0;transition:max-height .35s cubic-bezier(.4,0,.2,1)}
+.paste-body.open{max-height:320px}
+.paste-textarea{width:100%;background:transparent;border:none;color:var(--text);font-size:11.5px;font-family:inherit;line-height:1.7;padding:16px 20px;outline:none;resize:none;min-height:180px}
+.paste-textarea::placeholder{color:var(--muted)}
+.paste-footer{padding:8px 20px 14px;font-size:9px;color:var(--muted);letter-spacing:.5px;border-top:1px solid var(--border)}
+
+/* STEP 3 ACTION */
+.step3-actions{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.btn-give{display:inline-flex;align-items:center;gap:12px;padding:16px 40px;background:var(--red);border:none;color:#fff;font-size:12px;letter-spacing:3px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .25s;width:100%;justify-content:center}
+.btn-give:hover{opacity:.87}
+.btn-give:disabled{opacity:.35;cursor:not-allowed}
+.btn-give .btn-arrow{transition:transform .2s}
+.btn-give:hover:not(:disabled) .btn-arrow{transform:translateX(4px)}
+.btn-skip{background:none;border:none;color:var(--dim);font-size:10px;letter-spacing:1.5px;cursor:pointer;font-family:inherit;font-weight:600;transition:color .2s;text-align:center;padding:4px 0}
+.btn-skip:hover{color:var(--text)}
+.ws-tile{display:flex;align-items:center;gap:14px;padding:14px 16px;border:1px solid var(--border);background:var(--surface);transition:border-color .2s}
+.ws-tile.connected{border-color:var(--teal)}
+.ws-tile-icon{width:36px;height:36px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ws-tile-info{flex:1}
+.ws-tile-name{font-size:12px;font-weight:600;letter-spacing:.5px;color:var(--text)}
+.ws-tile-desc{font-size:10px;color:var(--dim);margin-top:2px}
+.ws-tile-status{font-size:9px;letter-spacing:2px;font-weight:700;color:var(--dim);flex-shrink:0}
+.ws-tile.connected .ws-tile-status{color:var(--teal)}
+.btn-error{font-size:11px;color:var(--red);margin-top:4px;display:none}
+
+@media(max-width:500px){
+  .options{grid-template-columns:1fr}
+  .step h2{font-size:28px}
+}
+</style>
+</head>
+<body>
+
+<div id="loading"><span class="load-logo">PRO<b>K</b>AIRA</span></div>
+
+<!-- Brain Memory Loader -->
+<div id="brainOverlay">
+  <canvas id="brainCanvas"></canvas>
+</div>
+
+<div id="onboarding">
+
+  <!-- Progress bar -->
+  <div class="progress-wrap">
+    <div class="progress-step active" id="prog-1"></div>
+    <div class="progress-step" id="prog-2"></div>
+    <div class="progress-step" id="prog-3"></div>
+    <div class="progress-step" id="prog-4"></div>
+    <span class="progress-label" id="progLabel">STEP 1 OF 4</span>
+  </div>
+
+  <!-- Steps wrapper -->
+  <div class="steps-outer" id="stepsOuter">
+
+    <!-- STEP 1: NAME IT -->
+    <div class="step active" id="step-1">
+      <div class="step-eyebrow">NAME IT</div>
+      <h2>What will you<br>call <i>yours</i>?</h2>
+      <p class="step-sub">Every KAIRA is unique to its owner. Give yours a name — it'll answer to it.</p>
+      <input class="big-input" id="aiNameInput" type="text" placeholder="Aria, Nova, Echo…" maxlength="24" autocomplete="off"
+        oninput="updateCharCount(this)" onkeydown="if(event.key==='Enter')tryNext1()">
+      <div class="char-count"><span id="charCount">0</span> / 24</div>
+      <div class="step-footer">
+        <span></span>
+        <button class="btn-next" id="btn1" onclick="tryNext1()" disabled>CONTINUE →</button>
+      </div>
+    </div>
+
+    <!-- STEP 2: SHAPE IT -->
+    <div class="step" id="step-2">
+      <div class="step-eyebrow">SHAPE IT</div>
+      <h2>How should your<br>AI <i>think</i>?</h2>
+      <p class="step-sub">These two choices shape everything — what it focuses on and how it communicates.</p>
+
+      <div class="section-label">FOCUS AREA</div>
+      <div class="options" id="focusOptions">
+        <button class="option" data-value="career" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">💼</span>
+          <div class="option-title">Career & Work</div>
+          <div class="option-desc">Productivity, decisions, goals, meeting prep, job growth.</div>
+        </button>
+        <button class="option" data-value="health" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🏃</span>
+          <div class="option-title">Health & Energy</div>
+          <div class="option-desc">Sleep, fitness, habits, wellness tracking, daily routines.</div>
+        </button>
+        <button class="option" data-value="building" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🚀</span>
+          <div class="option-title">Building Something</div>
+          <div class="option-desc">Startups, side projects, products, coding, launching ideas.</div>
+        </button>
+        <button class="option" data-value="learning" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">📚</span>
+          <div class="option-title">Learning & Growth</div>
+          <div class="option-desc">Skills, reading, courses, self-improvement, curiosity.</div>
+        </button>
+        <button class="option" data-value="creative" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🎨</span>
+          <div class="option-title">Creative Work</div>
+          <div class="option-desc">Writing, design, music, ideas, content, artistic projects.</div>
+        </button>
+        <button class="option" data-value="life" onclick="selectOption('focus',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🌱</span>
+          <div class="option-title">Life & Relationships</div>
+          <div class="option-desc">Personal growth, people, plans, finances, life direction.</div>
+        </button>
+      </div>
+
+      <div class="section-label" style="margin-top:24px">PERSONALITY PRESET</div>
+      <div class="options" id="personalityOptions">
+        <button class="option" data-value="none" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🤍</span>
+          <div class="option-title">No Preset</div>
+          <div class="option-desc">Clean slate. Your AI's personality is shaped only by your other choices.</div>
+        </button>
+        <button class="option" data-value="donna" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">👩‍💼</span>
+          <div class="option-title">Donna — Suits</div>
+          <div class="option-desc">Sharp, confident, always three steps ahead. Loyal, no-nonsense, gets things done.</div>
+        </button>
+        <button class="option" data-value="jarvis" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🤖</span>
+          <div class="option-title">JARVIS — Iron Man</div>
+          <div class="option-desc">Calm, precise, quietly brilliant. Anticipates needs before you ask.</div>
+        </button>
+        <button class="option" data-value="harvey" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">⚖️</span>
+          <div class="option-title">Harvey — Suits</div>
+          <div class="option-desc">Blunt, strategic, zero tolerance for excuses. Pushes you to be better.</div>
+        </button>
+        <button class="option" data-value="alfred" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🎩</span>
+          <div class="option-title">Alfred — Batman</div>
+          <div class="option-desc">Wise, measured, deeply caring. Offers perspective without judgment.</div>
+        </button>
+        <button class="option" data-value="samantha" onclick="selectOption('personality',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🌸</span>
+          <div class="option-title">Samantha — Her</div>
+          <div class="option-desc">Curious, warm, emotionally intelligent. Genuinely interested in you.</div>
+        </button>
+      </div>
+
+      <div class="section-label" style="margin-top:24px">COMMUNICATION STYLE</div>
+      <div class="options" id="styleOptions">
+        <button class="option" data-value="direct" onclick="selectOption('style',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">⚡</span>
+          <div class="option-title">Brief & Direct</div>
+          <div class="option-desc">No fluff. Get to the point fast. Bullet points, not essays.</div>
+        </button>
+        <button class="option" data-value="detailed" onclick="selectOption('style',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">🔬</span>
+          <div class="option-title">Detailed & Thorough</div>
+          <div class="option-desc">Full context, deep explanations, nothing left out.</div>
+        </button>
+        <button class="option" data-value="casual" onclick="selectOption('style',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">☕</span>
+          <div class="option-title">Casual & Friendly</div>
+          <div class="option-desc">Like texting a smart friend. Warm, human, low-pressure.</div>
+        </button>
+        <button class="option" data-value="structured" onclick="selectOption('style',this)">
+          <div class="option-check">✓</div>
+          <span class="option-icon">📋</span>
+          <div class="option-title">Structured & Logical</div>
+          <div class="option-desc">Frameworks, pros/cons, clear structure, systematic thinking.</div>
+        </button>
+      </div>
+
+      <div class="step-footer">
+        <button class="btn-back" onclick="goBack(2)">← BACK</button>
+        <button class="btn-next" id="btn2" onclick="tryNext2()" disabled>CONTINUE →</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: IMPORT IT -->
+    <div class="step" id="step-3">
+      <div class="step-eyebrow">IMPORT IT</div>
+      <h2>Bootstrap your<br><i>AI's</i> memory.</h2>
+      <p class="step-sub">Paste this prompt into Claude, ChatGPT, or Gemini. Get the response. Paste it below. One time — your AI starts knowing you from day one.</p>
+
+      <!-- Prompt block -->
+      <div class="prompt-block">
+        <div class="prompt-label">MEMORY EXTRACTION PROMPT<button class="copy-inline-btn" id="copyInline" onclick="copyPrompt(this)">COPY</button></div>
+        <textarea class="prompt-textarea" id="promptText" readonly spellcheck="false">You are preparing a memory profile for a personal AI assistant. Read everything I have written below, then produce a structured profile of me — written entirely in third person, as if you are briefing another AI about this person.
+
+OUTPUT RULES — follow exactly, every rule matters:
+- Output ONLY the structured document. Zero preamble. Zero closing remarks. No "Here is your profile."
+- Start the very first line with ##IDENTITY.
+- Use these exact 8 section headers, each on its own line: ##IDENTITY, ##PROJECTS, ##SKILLS, ##GOALS, ##PEOPLE, ##PREFERENCES, ##CONTEXT, ##STANDING_INSTRUCTIONS
+- Inside every section: write ONLY bullet points. One bullet per line. Each bullet starts with a dash and a space (- ).
+- Every bullet is a single complete sentence written in third person. Use my name if I gave it. Otherwise use "they/them."
+- Every bullet must contain a specific fact, name, project, preference, or concrete behavior. No vague generalizations.
+- Every section must have between 8 and 15 bullets. Count them.
+- No sub-headers. No bold. No italic. No numbered lists. No extra formatting of any kind inside sections.
+- Do not merge sections. Do not skip sections. All 8 must appear.
+
+THIRD PERSON FORMAT EXAMPLES (follow this pattern exactly):
+- Krishna is a full-stack developer and AI engineer based in Toronto, Canada.
+- He is building Project KAIRA, a personal AI app targeting beta in May 2026.
+- He prefers blunt, direct feedback with no softening or preamble.
+
+──────────────────────────────────────────────────────────────────
+ABOUT ME — fill in everything below this line before you send this prompt.
+
+Write freely and in detail: your name and where you live, what you do for work and what you're actually building right now, why each project matters to you personally, the key people in your life and what they mean to you, how you think and communicate and make decisions, what you care about most, what frustrates you, what you want in the next year and the next decade, what you fear, what you're proud of, what your daily life looks like, what you want your AI to always know about you, and anything important that a standard question would never surface.
+
+Draw from your existing conversations too — share any patterns, preferences, or recurring themes you've noticed in how you talk to AI.
+
+[WRITE EVERYTHING ABOUT YOURSELF HERE]
+──────────────────────────────────────────────────────────────────
+
+Now produce the memory profile. Follow all output rules above. Third person. Bullets only. 8–15 per section. All 8 sections. Start immediately.
+
+##IDENTITY
+##PROJECTS
+##SKILLS
+##GOALS
+##PEOPLE
+##PREFERENCES
+##CONTEXT
+##STANDING_INSTRUCTIONS</textarea>
+        <div class="copy-row">
+          <button class="copy-main-btn" id="copyMain" onclick="copyPrompt(this)">
+            <span class="copy-text">COPY PROMPT</span>
+            <span class="check-icon" style="display:none">✓ COPIED TO CLIPBOARD</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Paste areas -->
+      <div class="paste-panels" id="pasteGrid">
+
+        <div class="paste-panel">
+          <div class="paste-header" onclick="togglePanel('claude')">
+            <div class="paste-header-left">
+              <div class="paste-ai-dot dot-claude"></div>
+              <span class="paste-ai-name">CLAUDE</span>
+              <span id="claude-status" class="paste-char-count"></span>
+            </div>
+            <span class="paste-toggle" id="claude-toggle">COLLAPSE ↑</span>
+          </div>
+          <div class="paste-body open" id="claude-body">
+            <textarea class="paste-textarea" id="claude-paste" placeholder="Paste Claude's memory document here…&#10;&#10;It should start with ##IDENTITY" oninput="onPasteInput('claude', this)"></textarea>
+            <div class="paste-footer">Paste the full output starting with ##IDENTITY</div>
+          </div>
+        </div>
+
+        <div class="paste-panel">
+          <div class="paste-header" onclick="togglePanel('chatgpt')">
+            <div class="paste-header-left">
+              <div class="paste-ai-dot dot-chatgpt"></div>
+              <span class="paste-ai-name">CHATGPT</span>
+              <span id="chatgpt-status" class="paste-char-count"></span>
+            </div>
+            <span class="paste-toggle" id="chatgpt-toggle">COLLAPSE ↑</span>
+          </div>
+          <div class="paste-body open" id="chatgpt-body">
+            <textarea class="paste-textarea" id="chatgpt-paste" placeholder="Paste ChatGPT's memory document here…&#10;&#10;It should start with ##IDENTITY" oninput="onPasteInput('chatgpt', this)"></textarea>
+            <div class="paste-footer">Paste the full output starting with ##IDENTITY</div>
+          </div>
+        </div>
+
+        <div class="paste-panel">
+          <div class="paste-header" onclick="togglePanel('gemini')">
+            <div class="paste-header-left">
+              <div class="paste-ai-dot dot-gemini"></div>
+              <span class="paste-ai-name">GEMINI</span>
+              <span id="gemini-status" class="paste-char-count"></span>
+            </div>
+            <span class="paste-toggle" id="gemini-toggle">COLLAPSE ↑</span>
+          </div>
+          <div class="paste-body open" id="gemini-body">
+            <textarea class="paste-textarea" id="gemini-paste" placeholder="Paste Gemini's memory document here…&#10;&#10;It should start with ##IDENTITY" oninput="onPasteInput('gemini', this)"></textarea>
+            <div class="paste-footer">Paste the full output starting with ##IDENTITY</div>
+          </div>
+        </div>
+
+        <div class="paste-panel">
+          <div class="paste-header" onclick="togglePanel('life')">
+            <div class="paste-header-left">
+              <div class="paste-ai-dot dot-life"></div>
+              <span class="paste-ai-name">LIFE HISTORY</span>
+              <span id="life-status" class="paste-char-count"></span>
+            </div>
+            <span class="paste-toggle" id="life-toggle">COLLAPSE ↑</span>
+          </div>
+          <div class="paste-body open" id="life-body">
+            <textarea class="paste-textarea" id="life-paste" placeholder="Write or paste anything about yourself — your background, experiences, goals, relationships, habits, values, or anything you want your AI to know. Free-form, no format required. No size limit." oninput="onPasteInput('life', this)" style="min-height:220px"></textarea>
+            <div class="paste-footer">Any format accepted — your AI will extract what matters</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Action row -->
+      <div class="step3-actions">
+        <button class="btn-give" id="btnGive" onclick="processAndSave()">
+          <span id="btnGiveLabel">GIVE TO ANA</span>
+          <span class="btn-arrow">→</span>
+        </button>
+        <div class="btn-error" id="btnError">At least one response must be pasted before continuing.</div>
+        <button class="btn-skip" onclick="skipImport()">SKIP FOR NOW — GO TO DASHBOARD →</button>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn-back" onclick="goBack(3)">← BACK</button>
+      </div>
+
+    </div>
+
+    <!-- STEP 4: GOOGLE WORKSPACE -->
+    <div class="step" id="step-4" style="display:none">
+      <div class="step-eyebrow">CONNECT</div>
+      <h2>Link your<br><i>workspace</i></h2>
+      <p class="step-sub">KAIRA reads your emails, files and notes to stay in context — across every conversation.</p>
+
+      <div id="ws-tiles" style="display:flex;flex-direction:column;gap:10px;margin:32px 0 28px">
+        <div class="ws-tile" id="tile-gmail">
+          <div class="ws-tile-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#EA4335" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-.561.289-1.056.725-1.342L12 12l11.275-7.885c.436.286.725.781.725 1.342z"/><path fill="#4285F4" d="M12 12L.725 4.115A1.63 1.63 0 011.636 3.82h20.728c.38 0 .73.132 1.001.343L12 12z"/></svg>
+          </div>
+          <div class="ws-tile-info">
+            <div class="ws-tile-name">Gmail</div>
+            <div class="ws-tile-desc">Emails, threads, contacts</div>
+          </div>
+          <div class="ws-tile-status" id="status-gmail">PENDING</div>
+        </div>
+
+        <div class="ws-tile" id="tile-drive">
+          <div class="ws-tile-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M8.267 3L2 13.5l3.267 5.5L12 8.5z"/><path fill="#EA4335" d="M12 8.5l6.733 10.5H5.267L2 13.5z"/><path fill="#FBBC05" d="M15.733 3L22 13.5h-6.533L8.267 3z"/></svg>
+          </div>
+          <div class="ws-tile-info">
+            <div class="ws-tile-name">Google Drive</div>
+            <div class="ws-tile-desc">Files, docs, shared content</div>
+          </div>
+          <div class="ws-tile-status" id="status-drive">PENDING</div>
+        </div>
+
+        <div class="ws-tile" id="tile-keep">
+          <div class="ws-tile-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#FBBC05" d="M9 3h6a2 2 0 012 2v1H7V5a2 2 0 012-2z"/><rect fill="#F9A825" x="5" y="6" width="14" height="15" rx="1"/><path fill="#fff" d="M8 10h8M8 13h8M8 16h5" stroke="#fff" stroke-width="1.2" stroke-linecap="round" fill="none"/></svg>
+          </div>
+          <div class="ws-tile-info">
+            <div class="ws-tile-name">Google Keep</div>
+            <div class="ws-tile-desc">Notes, lists, ideas</div>
+          </div>
+          <div class="ws-tile-status" id="status-keep">PENDING</div>
+        </div>
+      </div>
+
+      <div id="ws-error" style="display:none;font-size:11px;color:#e17055;margin-bottom:16px;letter-spacing:.5px"></div>
+
+      <button class="btn-give" id="btnConnect" onclick="connectWorkspace()">
+        <svg width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px"><path fill="#EA4335" d="M5.27 9.76A7.08 7.08 0 0112 4.9c1.69 0 3.21.59 4.41 1.56l3.3-3.3A11.95 11.95 0 0012 .9C8.27.9 5.02 2.93 3.14 5.96l2.13 3.8z"/><path fill="#34A853" d="M16.04 18.01A7.08 7.08 0 0112 19.1c-2.9 0-5.38-1.76-6.54-4.3l-3.86 2.98C3.84 21.32 7.66 23.1 12 23.1c3.49 0 6.63-1.23 9.03-3.25l-4.99-1.84z"/><path fill="#4A90D9" d="M21.03 19.85C22.9 17.84 24 15.1 24 12c0-.9-.1-1.77-.27-2.61H12v5.22h6.72a5.83 5.83 0 01-2.68 3.8l4.99 1.44z"/><path fill="#FBBC05" d="M5.46 14.8A7.14 7.14 0 014.9 12c0-.97.17-1.92.46-2.8L3.14 5.96A11.97 11.97 0 000 12c0 2.03.51 3.95 1.4 5.62l4.06-2.82z"/></svg>
+        CONNECT GOOGLE
+      </button>
+      <div style="margin-top:14px">
+        <button class="btn-skip" onclick="skipWorkspace()">SKIP — SET UP LATER →</button>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn-back" onclick="goBack(4)">← BACK</button>
+      </div>
+    </div>
+
+  </div><!-- /steps-outer -->
+
+</div><!-- /onboarding -->
+
+<script>
+const answers = { name: '', focus: '', style: '', personality: 'none' };
+let currentStep = 1;
+
+// ── Step 1 ────────────────────────────────────────────────────
+function updateCharCount(el) {
+  const val = el.value.trim();
+  document.getElementById('charCount').textContent = el.value.length;
+  document.getElementById('btn1').disabled = val.length === 0;
+  answers.name = val;
+  const lbl = document.getElementById('btnGiveLabel');
+  if (lbl) lbl.textContent = val ? `GIVE TO ${val.toUpperCase()}` : 'GIVE TO ANA';
+}
+
+function tryNext1() {
+  const val = document.getElementById('aiNameInput').value.trim();
+  if (!val) return;
+  answers.name = val;
+  goToStep(2);
+}
+
+// ── Step 2 ────────────────────────────────────────────────────
+function tryNext2() {
+  if (!answers.focus || !answers.style) return;
+  // Fire and forget — save profile before step 3
+  window._saveProfile(answers).catch(() => {});
+  goToStep(3);
+}
+
+// ── Option selection ──────────────────────────────────────────
+function selectOption(type, el) {
+  const groupMap = { focus: 'focusOptions', personality: 'personalityOptions', style: 'styleOptions' };
+  const group = groupMap[type] || 'focusOptions';
+  document.querySelectorAll(`#${group} .option`).forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  answers[type] = el.dataset.value;
+  // Enable CONTINUE only when focus AND style are selected (personality defaults to 'none' so always set)
+  document.getElementById('btn2').disabled = !(answers.focus && answers.style);
+}
+
+// ── Navigation ────────────────────────────────────────────────
+function goToStep(n) {
+  const prev = document.getElementById(`step-${currentStep}`);
+  const next = document.getElementById(`step-${n}`);
+  prev.classList.remove('active');
+  prev.classList.add('out');
+  setTimeout(() => { prev.classList.remove('out'); prev.style.display = 'none'; }, 400);
+  next.style.display = '';
+  requestAnimationFrame(() => { requestAnimationFrame(() => { next.classList.add('active'); }); });
+  currentStep = n;
+  updateProgress(n);
+}
+
+function goBack(from) {
+  goToStep(from - 1);
+}
+
+function updateProgress(n) {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById(`prog-${i}`);
+    el.className = 'progress-step';
+    if (i < n) el.classList.add('done');
+    else if (i === n) el.classList.add('active');
+  }
+  document.getElementById('progLabel').textContent = `STEP ${n} OF 4`;
+}
+
+// ── Prompt copy ───────────────────────────────────────────────
+function copyPrompt(btn) {
+  const text = document.getElementById('promptText').value;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    const other = btn.id === 'copyMain' ? document.getElementById('copyInline') : document.getElementById('copyMain');
+    if (other) { other.classList.add('copied'); setTimeout(() => other.classList.remove('copied'), 2400); }
+    // Toggle copy-text / check-icon for main button
+    const ct = btn.querySelector('.copy-text');
+    const ci = btn.querySelector('.check-icon');
+    if (ct) ct.style.display = 'none';
+    if (ci) ci.style.display = 'inline';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      if (ct) ct.style.display = '';
+      if (ci) ci.style.display = 'none';
+    }, 2400);
+  });
+}
+
+// ── Paste panel toggle ────────────────────────────────────────
+const panelState = { claude: true, chatgpt: true, gemini: true, life: true };
+
+function togglePanel(id) {
+  panelState[id] = !panelState[id];
+  const body = document.getElementById(id + '-body');
+  const toggle = document.getElementById(id + '-toggle');
+  if (panelState[id]) {
+    body.classList.add('open');
+    toggle.textContent = 'COLLAPSE ↑';
+  } else {
+    body.classList.remove('open');
+    toggle.textContent = 'EXPAND ↓';
+  }
+}
+
+function onPasteInput(id, el) {
+  const len = el.value.trim().length;
+  const status = document.getElementById(id + '-status');
+  if (len > 0) {
+    status.textContent = len.toLocaleString() + ' chars';
+    status.classList.add('paste-filled');
+  } else {
+    status.textContent = '';
+    status.classList.remove('paste-filled');
+  }
+}
+
+// ── Section parser ────────────────────────────────────────────
+function parseSections(text) {
+  const sections = {};
+  const matches = text.matchAll(/##([A-Z_]+)\s*\n([\s\S]*?)(?=##[A-Z_]+|$)/g);
+  for (const m of matches) {
+    sections[m[1].trim()] = m[2].trim();
+  }
+  return sections;
+}
+
+function mergeSections(parsed1, parsed2, parsed3) {
+  const all = [parsed1, parsed2, parsed3];
+  const merged = {};
+  const keys = new Set(all.flatMap(p => Object.keys(p)));
+  for (const k of keys) {
+    const parts = all.map(p => p[k] || '').filter(Boolean);
+    const seen = new Set();
+    const bullets = [];
+    for (const part of parts) {
+      // Extract individual bullet lines
+      const lines = part.split('\n')
+        .map(l => l.replace(/^[-•*\d.)\s]+/, '').trim())
+        .filter(l => l.length > 8);
+      for (const line of lines) {
+        // Also split compound bullets at sentence boundaries (e.g. "He did X. He also did Y.")
+        const sents = line.split(/(?<=[.!?])\s+(?=[A-Z He She])/)
+          .map(s => s.replace(/[.!?]+$/, '').trim())
+          .filter(s => s.length > 8);
+        const toAdd = sents.length > 1 ? sents : [line];
+        for (const mem of toAdd) {
+          // Deduplicate on normalized first 55 chars
+          const norm = mem.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').slice(0, 55);
+          if (!seen.has(norm)) { seen.add(norm); bullets.push(mem); }
+        }
+      }
+    }
+    merged[k] = bullets.join('\n');
+  }
+  return merged;
+}
+
+// ── Process & Save ─────────────────────────────────────────────
+async function processAndSave() {
+  const claudeText  = document.getElementById('claude-paste').value.trim();
+  const chatgptText = document.getElementById('chatgpt-paste').value.trim();
+  const geminiText  = document.getElementById('gemini-paste').value.trim();
+  const lifeText    = document.getElementById('life-paste').value.trim();
+
+  const errEl = document.getElementById('btnError');
+
+  if (!claudeText && !chatgptText && !geminiText && !lifeText) {
+    errEl.style.display = 'block';
+    ['claude','chatgpt','gemini','life'].forEach(id => { if (!panelState[id]) togglePanel(id); });
+    return;
+  }
+  errEl.style.display = 'none';
+
+  const btn = document.getElementById('btnGive');
+  btn.disabled = true;
+
+  try {
+    const p1 = claudeText  ? parseSections(claudeText)  : {};
+    const p2 = chatgptText ? parseSections(chatgptText) : {};
+    const p3 = geminiText  ? parseSections(geminiText)  : {};
+    const structured = mergeSections(p1, p2, p3);
+
+    // Life history: free-form → LIFE_HISTORY section
+    // Cap at 400KB to stay under Firestore 1MB doc limit (other fields + raw take ~100KB)
+    if (lifeText) {
+      structured['LIFE_HISTORY'] = lifeText.slice(0, 400000);
+    }
+
+    if (Object.keys(structured).length === 0) {
+      const combined = [claudeText, chatgptText, geminiText, lifeText].filter(Boolean).join('\n\n---\n\n');
+      structured['IDENTITY'] = combined.slice(0, 2000);
+    }
+
+    // Store raw life text truncated (Firestore 1MB doc limit) — full text is in structured.LIFE_HISTORY
+    const raw = { claude: claudeText || null, chatgpt: chatgptText || null, gemini: geminiText || null, life: lifeText ? lifeText.slice(0, 5000) + (lifeText.length > 5000 ? '…[truncated]' : '') : null };
+
+    const Loader = await window._brainLoaderReady;
+    if (Loader) {
+      const loader = new Loader(structured);
+      const loaderDone = loader.start();
+      await new Promise(r => requestAnimationFrame(r));
+      const saveDone = window._saveMemories(raw, structured)
+        .then(() => loader.notifySaveComplete())
+        .catch(e => { loader.notifySaveComplete(); throw e; });
+      await Promise.all([loaderDone, saveDone]);
+    } else {
+      await window._saveMemories(raw, structured);
+    }
+
+    // Proceed to Google Workspace step
+    goToStep(4);
+    btn.disabled = false;
+
+  } catch(e) {
+    btn.disabled = false;
+    errEl.textContent = 'Save failed — please try again. (' + (e.message || 'unknown error') + ')';
+    errEl.style.display = 'block';
+  }
+}
+
+async function skipImport() {
+  goToStep(4);
+}
+
+// ── Step 4: Google Workspace ──────────────────────────────────
+async function connectWorkspace() {
+  const btn = document.getElementById('btnConnect');
+  const errEl = document.getElementById('ws-error');
+  btn.disabled = true;
+  btn.textContent = 'OPENING GOOGLE...';
+  errEl.style.display = 'none';
+
+  try {
+    const token = await window._connectWorkspace();
+    if (token) {
+      // Mark all tiles connected
+      ['gmail','drive','keep','calendar','contacts','photos','docs','sheets','slides','tasks','chat','meet'].forEach(s => {
+        const tile = document.getElementById('tile-' + s);
+        const status = document.getElementById('status-' + s);
+        if (tile) tile.classList.add('connected');
+        if (status) status.textContent = 'CONNECTED';
+      });
+      // Try Keep import via memento scope (silent fail for personal Gmail)
+      const keepCount = await window._fetchKeepNotes(token, currentUser.uid);
+      if (keepCount !== null) {
+        const keepStatus = document.getElementById('status-keep');
+        if (keepStatus) keepStatus.textContent = `${keepCount} NOTES IMPORTED`;
+      }
+      btn.textContent = '✓ CONNECTED — LAUNCHING YOUR AI';
+      setTimeout(() => window._completeOnboarding(), 1200);
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px"><path fill="#EA4335" d="M5.27 9.76A7.08 7.08 0 0112 4.9c1.69 0 3.21.59 4.41 1.56l3.3-3.3A11.95 11.95 0 0012 .9C8.27.9 5.02 2.93 3.14 5.96l2.13 3.8z"/><path fill="#34A853" d="M16.04 18.01A7.08 7.08 0 0112 19.1c-2.9 0-5.38-1.76-6.54-4.3l-3.86 2.98C3.84 21.32 7.66 23.1 12 23.1c3.49 0 6.63-1.23 9.03-3.25l-4.99-1.84z"/><path fill="#4A90D9" d="M21.03 19.85C22.9 17.84 24 15.1 24 12c0-.9-.1-1.77-.27-2.61H12v5.22h6.72a5.83 5.83 0 01-2.68 3.8l4.99 1.44z"/><path fill="#FBBC05" d="M5.46 14.8A7.14 7.14 0 014.9 12c0-.97.17-1.92.46-2.8L3.14 5.96A11.97 11.97 0 000 12c0 2.03.51 3.95 1.4 5.62l4.06-2.82z"/></svg>CONNECT GOOGLE';
+    errEl.textContent = e.code === 'auth/popup-closed-by-user' ? 'Popup closed — try again.' : (e.message || 'Connection failed.');
+    errEl.style.display = 'block';
+  }
+}
+
+async function skipWorkspace() {
+  await window._completeOnboarding();
+}
+</script>
+
+<script type="module">
+// Expose a promise so processAndSave() can await module readiness
+let _resolveLoader;
+window._brainLoaderReady = new Promise(r => { _resolveLoader = r; });
+
+const SECTIONS = ['IDENTITY','PROJECTS','SKILLS','GOALS','PEOPLE','PREFERENCES','CONTEXT','STANDING_INSTRUCTIONS','LIFE_HISTORY'];
+const SHORT = { IDENTITY:'IDENTITY', PROJECTS:'PROJECTS', SKILLS:'SKILLS', GOALS:'GOALS', PEOPLE:'PEOPLE', PREFERENCES:'PREFERENCES', CONTEXT:'CONTEXT', STANDING_INSTRUCTIONS:'RULES', LIFE_HISTORY:'LIFE' };
+
+// Section colors (hue offset for each section's active glow)
+const SEC_COLOR = [
+  [214,48,49],   // IDENTITY       — red
+  [220,80,40],   // PROJECTS       — orange-red
+  [180,40,100],  // SKILLS         — crimson-rose
+  [160,30,80],   // GOALS          — deep rose
+  [40,120,200],  // PEOPLE         — blue
+  [195,55,55],   // PREFERENCES    — warm crimson
+  [200,130,20],  // CONTEXT        — golden amber
+  [210,160,30],  // STANDING       — gold
+  [220,30,70],   // LIFE_HISTORY   — red/crimson
+];
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const BR     = 158;       // brain scale px
+const CDIST  = 46;        // max synapse distance px
+const MCONN  = 5;         // max connections per neuron
+const RSPD   = 0.004;     // Y rotation speed rad/frame
+const FOV    = 700;       // perspective focal length
+const FDECAY = 0.011;     // fire alpha decay per frame
+const MEM_MS = 110;       // ms between memory releases
+
+// ─── Pre-render glow stamp ────────────────────────────────────────────────────
+function makeGlowStamp(size, r, g, b) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size / 2, half = size / 2;
+  const grd = ctx.createRadialGradient(cx,cx,0, cx,cx,half);
+  grd.addColorStop(0,   `rgba(255,255,255,1)`);
+  grd.addColorStop(0.10,`rgba(255,255,255,1)`);
+  grd.addColorStop(0.25,`rgba(${r},${g},${b},0.92)`);
+  grd.addColorStop(0.50,`rgba(${r},${g},${b},0.50)`);
+  grd.addColorStop(0.78,`rgba(${r},${g},${b},0.18)`);
+  grd.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, size, size);
+  return c;
+}
+
+// Pre-render 9 section glow stamps (8 standard + LIFE_HISTORY)
+const GLOW_STAMPS = SEC_COLOR.map(([r,g,b]) => makeGlowStamp(100, r, g, b));
+const AMBIENT_STAMP = makeGlowStamp(100, 214, 48, 49);
+
+const BRAIN_RAW = [[-0.034,0.5246,0.0007],[-0.3917,0.7419,-0.1828],[-0.3667,0.2753,-0.069],[-0.3808,-0.0311,-0.348],[-0.2617,0.5322,0.3398],[-0.2926,-0.4806,0.5083],[-0.0546,-0.4642,0.0822],[-0.4421,-0.3958,-0.2606],[-0.4316,0.1994,-0.0456],[-0.6867,-0.2225,-0.0278],[-0.4395,0.1762,-0.3696],[-0.2869,0.4215,-0.4226],[-0.1173,0.4865,-0.4152],[-0.0194,0.6789,-0.0868],[-0.2445,0.8529,-0.0642],[-0.4572,0.6679,-0.1218],[-0.4998,0.431,0.2543],[-0.5101,0.2645,-0.202],[-0.3396,-0.3818,0.2537],[-0.4175,-0.0852,0.4996],[-0.1714,-0.2859,0.5675],[-0.2118,0.0626,0.4395],[-0.021,0.5666,0.317],[-0.1243,-0.0921,0.2459],[-0.0764,-0.2313,0.3791],[-0.1503,-0.6022,-0.0718],[-0.2397,-0.8405,-0.3304],[-0.5879,-0.5207,0.1017],[-0.5271,-0.4753,-0.2842],[-0.365,-0.0707,-0.4371],[-0.2349,-0.4363,-0.0806],[-0.0048,0.3169,-0.0213],[-0.4809,0.2086,-0.1405],[-0.6145,0.2704,-0.242],[-0.6616,0.0331,-0.2879],[-0.4644,0.0274,-0.0831],[-0.4817,-0.1828,-0.1701],[-0.404,0.5088,-0.1127],[-0.5039,0.5583,-0.2559],[-0.4195,0.4887,-0.3166],[-0.399,0.3057,-0.3457],[-0.5373,0.1946,-0.4467],[-0.3312,0.378,-0.5167],[-0.336,0.4372,-0.4302],[-0.2352,0.1508,-0.5651],[-0.2613,0.2512,-0.4293],[-0.2302,0.1682,-0.3567],[-0.0607,0.6512,-0.4441],[-0.0083,0.5958,-0.1163],[-0.1048,0.4776,-0.4317],[-0.0176,0.286,-0.2925],[-0.1206,0.0616,-0.3414],[-0.1173,0.6554,-0.0858],[-0.2946,0.7647,-0.2528],[-0.0807,0.7686,-0.1974],[-0.0639,0.9015,0.1335],[-0.2166,0.6975,0.1258],[-0.3913,0.6188,0.125],[-0.4503,0.8167,-0.2504],[-0.4562,0.6805,-0.0133],[-0.5837,0.5802,-0.1761],[-0.3804,0.682,0.249],[-0.5166,0.4167,0.0882],[-0.5503,0.2056,0.058],[-0.4318,0.2084,0.2277],[-0.5489,0.1959,0.3168],[-0.5826,0.1082,0.144],[-0.7116,0.1282,-0.078],[-0.6666,-0.0175,0.1107],[-0.4402,-0.1697,0.0357],[-0.5629,-0.272,-0.0272],[-0.4301,-0.2264,0.2609],[-0.5361,-0.4211,0.0275],[-0.5321,-0.3792,0.4007],[-0.2658,-0.4869,0.3901],[-0.5102,-0.0302,0.4025],[-0.3279,-0.0799,0.5414],[-0.2128,-0.436,0.3021],[-0.3835,-0.3277,0.5554],[-0.1823,-0.4031,0.6028],[-0.2598,0.5865,0.2317],[-0.2108,0.4493,0.4826],[-0.2599,0.0854,0.4685],[-0.2933,0.1091,0.3512],[-0.1186,0.1682,0.6223],[-0.0173,0.5799,0.4133],[-0.0268,0.1694,0.4901],[-0.0372,0.5886,0.232],[-0.0679,0.6456,0.0993],[0.0056,0.5815,0.0495],[-0.0218,0.213,0.1687],[-0.0889,-0.0099,0.2902],[-0.0032,0.2332,0.2635],[-0.0055,-0.1967,0.1332],[-0.112,-0.4362,0.0709],[-0.0705,-0.4829,0.2438],[-0.1941,-0.2877,0.501],[-0.089,-0.4447,0.3774],[-0.1814,-0.6027,0.4049],[-0.1208,-0.5699,0.0977],[-0.0546,-0.7174,0.285],[-0.2796,-0.8548,0.0544],[-0.1277,-0.8631,-0.1113],[-0.2218,-0.8123,-0.2427],[-0.3955,-0.8499,-0.1068],[-0.2339,-0.7306,0.1105],[-0.5209,-0.5984,-0.053],[-0.4401,-0.5091,-0.0194],[-0.6136,-0.3745,0.0588],[-0.6304,-0.2525,-0.4642],[-0.4932,-0.4947,-0.3013],[-0.4538,-0.3631,-0.2563],[-0.5532,-0.4999,-0.0859],[-0.3838,0.0789,-0.7106],[-0.189,-0.0092,-0.3743],[-0.3138,-0.287,-0.2379],[-0.2763,-0.3452,-0.2667],[-0.2905,-0.5152,-0.3231],[-0.0928,-0.2362,-0.2225],[-0.1063,-0.3943,-0.0304],[-0.2375,-0.4452,-0.2035],[-0.2708,-0.4084,-0.2996],[-0.2537,-0.0651,-0.3256],[-0.0921,-0.1648,-0.1769],[-0.005,0.143,-0.0819],[-0.005,0.0192,-0.1995],[-0.0214,-0.3377,-0.0127],[-0.4162,0.2078,-0.0855],[-0.4444,0.1365,-0.1953],[-0.4318,-0.005,-0.187],[-0.4049,-0.0022,-0.0928],[-0.3954,-0.0293,-0.0121],[-0.5094,0.1233,-0.4025],[-0.6162,0.1918,-0.3808],[-0.6893,0.045,-0.3784],[-0.6441,0.1589,-0.3712],[-0.6518,-0.0551,-0.2214],[-0.4599,0.0013,-0.0652],[-0.4802,0.0737,-0.1138],[-0.5853,-0.004,-0.0588],[-0.6288,0.0322,-0.1943],[-0.5762,-0.0365,-0.2537],[-0.6816,-0.0812,-0.0654],[-0.5289,-0.1628,-0.2558],[-0.6617,-0.1923,-0.1439],[-0.5363,-0.2735,-0.0391],[-0.4845,0.333,-0.103],[-0.3687,0.2596,-0.0658],[-0.3905,0.5244,-0.1126],[-0.3966,0.4801,-0.0987],[-0.4409,0.3175,-0.1632],[-0.53,0.6681,-0.3427],[-0.5035,0.4787,-0.3463],[-0.3944,0.5981,-0.328],[-0.4044,0.6081,-0.3117],[-0.4242,0.4889,-0.3187],[-0.4362,0.1521,-0.3275],[-0.4613,0.2033,-0.3677],[-0.4739,0.4543,-0.1961],[-0.377,0.3638,-0.2876],[-0.4496,0.2497,-0.3307],[-0.5248,0.3273,-0.3065],[-0.4456,0.2526,-0.3844],[-0.5688,0.2455,-0.4198],[-0.4224,0.2991,-0.5563],[-0.5933,0.1595,-0.5792],[-0.467,0.1634,-0.6378],[-0.413,0.2554,-0.4284],[-0.3729,0.2426,-0.6979],[-0.288,0.1097,-0.6637],[-0.3981,0.3493,-0.2875],[-0.3672,0.3999,-0.4596],[-0.2571,0.5628,-0.3412],[-0.2918,0.5395,-0.371],[-0.2466,0.4423,-0.3744],[-0.2567,0.1293,-0.5467],[-0.287,0.2035,-0.4053],[-0.3394,0.3681,-0.3212],[-0.3875,0.2235,-0.3649],[-0.2854,0.2696,-0.4358],[-0.2473,0.1305,-0.4197],[-0.2614,0.1941,-0.3713],[-0.3445,0.0378,-0.4186],[-0.2385,0.1731,-0.3529],[-0.3709,-0.0401,-0.3457],[-0.1606,0.6976,-0.4065],[-0.03,0.7462,-0.3225],[-0.1504,0.6771,-0.4417],[-0.0862,0.5961,-0.4281],[-0.1419,0.4378,-0.4894],[-0.0961,0.6149,-0.2486],[-0.0117,0.5446,-0.0213],[-0.0903,0.5336,-0.2836],[-0.0775,0.5054,-0.3016],[-0.0062,0.3355,-0.2023],[-0.0878,0.3822,-0.4707],[-0.0419,0.6159,-0.3406],[-0.0776,0.5637,-0.4702],[-0.0132,0.3224,-0.3197],[-0.1242,0.3815,-0.382],[-0.0276,0.3209,-0.3427],[-0.0447,0.1527,-0.3225],[-0.1122,0.223,-0.3598],[-0.2486,0.026,-0.3299],[-0.0578,0.704,-0.1198],[-0.1273,0.6858,-0.1391],[-0.1284,0.6347,0.0029],[-0.1084,0.6866,-0.1103],[-0.0677,0.6712,0.0295],[-0.0487,0.8207,-0.2708],[-0.2617,0.7105,-0.3326],[-0.1369,0.9021,-0.2651],[-0.1094,0.9774,-0.1812],[-0.2458,0.8611,-0.1416],[-0.0626,0.7994,-0.0258],[-0.0866,0.831,-0.1292],[-0.0493,0.7962,-0.0636],[-0.1042,0.9471,-0.0514],[-0.0329,0.7763,0.1321],[-0.1372,0.8514,0.2158],[-0.2932,0.8608,0.0153],[-0.1613,0.8272,0.0689],[-0.2541,0.7821,0.1183],[-0.2693,0.762,0.1017],[-0.2722,0.7712,-0.0455],[-0.2547,0.6881,-0.0162],[-0.2986,0.6231,0.0365],[-0.3157,0.6497,0.1096],[-0.3097,0.8517,-0.2705],[-0.3499,0.7391,-0.2635],[-0.4213,0.8188,-0.2162],[-0.4033,0.729,-0.171],[-0.5493,0.6573,-0.2456],[-0.4652,0.7205,0.051],[-0.3765,0.784,-0.0903],[-0.3573,0.8068,0.0292],[-0.4262,0.6604,-0.1346],[-0.4829,0.5312,0.0625],[-0.4976,0.6455,-0.0583],[-0.4614,0.5452,-0.1623],[-0.5336,0.419,-0.1561],[-0.4845,0.3826,-0.2114],[-0.2845,0.6,0.2156],[-0.3927,0.5919,0.086],[-0.3133,0.514,0.1818],[-0.5203,0.5071,0.2321],[-0.2761,0.4703,0.3962],[-0.4937,0.4434,0.1081],[-0.5417,0.3406,-0.1214],[-0.5809,0.2842,0.1195],[-0.5523,0.2515,0.0912],[-0.6684,0.2586,0.0998],[-0.4555,0.3571,0.3163],[-0.4839,0.471,0.1081],[-0.5092,0.3009,0.2279],[-0.4589,0.2329,0.1828],[-0.4525,0.2628,0.4604],[-0.4873,0.1995,0.2761],[-0.5507,0.1124,0.1765],[-0.6126,0.1184,0.2674],[-0.4184,0.0056,0.2925],[-0.4742,0.0663,0.1723],[-0.5207,0.0802,0.1326],[-0.625,0.0624,0.1877],[-0.6788,0.0872,0.2261],[-0.6477,-0.0566,0.2223],[-0.7127,0.2223,-0.0773],[-0.5284,0.3528,-0.1834],[-0.6481,0.0573,-0.0587],[-0.6068,-0.0127,-0.012],[-0.4129,-0.1453,-0.0048],[-0.7146,-0.2055,0.1554],[-0.6544,0.1096,0.083],[-0.6204,0.0211,0.1121],[-0.6278,-0.0123,0.0051],[-0.6112,-0.3425,0.2621],[-0.592,-0.2295,0.1348],[-0.7199,-0.2239,0.0337],[-0.6252,-0.2791,-0.0126],[-0.4924,-0.2989,-0.0044],[-0.5917,-0.1122,0.4007],[-0.6071,-0.2133,0.2977],[-0.4096,-0.1294,0.2775],[-0.376,-0.2301,0.2616],[-0.3408,-0.3793,0.2524],[-0.5325,-0.2933,0.2361],[-0.5545,-0.3223,0.0432],[-0.4927,-0.3295,0.1532],[-0.4397,-0.457,0.1467],[-0.4643,-0.5352,0.2009],[-0.4438,-0.482,0.4057],[-0.5132,-0.3567,0.3466],[-0.5395,-0.4958,0.2964],[-0.4637,-0.5116,0.1915],[-0.4412,-0.5021,0.4359],[-0.3742,-0.5607,0.2814],[-0.433,-0.6714,0.3061],[-0.2933,-0.6599,0.2955],[-0.2765,-0.6018,0.2653],[-0.5298,-0.1411,0.4918],[-0.4063,-0.22,0.3592],[-0.3922,-0.1013,0.4649],[-0.3244,-0.1722,0.4691],[-0.2595,-0.1068,0.4627],[-0.2933,-0.4622,0.391],[-0.281,-0.5643,0.1632],[-0.2724,-0.3579,0.3987],[-0.2998,-0.3891,0.4529],[-0.177,-0.5505,0.5095],[-0.2256,-0.11,0.5382],[-0.4368,-0.3016,0.5391],[-0.325,-0.1832,0.5019],[-0.3239,-0.3657,0.5796],[-0.2319,-0.076,0.5315],[-0.1258,-0.1086,0.6376],[-0.1355,-0.2844,0.6283],[-0.0842,-0.2133,0.5574],[-0.0169,-0.2085,0.4854],[-0.2791,0.498,0.1398],[-0.2454,0.5217,0.3246],[-0.2404,0.4088,0.2904],[-0.1795,0.5002,0.3417],[-0.1795,0.5299,0.3893],[-0.4184,0.1197,0.4086],[-0.4447,0.008,0.4309],[-0.3874,0.0957,0.4223],[-0.3078,0.0696,0.3861],[-0.291,-0.0507,0.4193],[-0.2894,0.2999,0.5415],[-0.2496,0.2526,0.316],[-0.2482,0.3004,0.3772],[-0.2542,0.0593,0.3839],[-0.1446,0.3223,0.4332],[-0.1133,0.2802,0.5562],[-0.2091,-0.0928,0.6431],[-0.2108,0.0849,0.6491],[-0.0898,0.0899,0.5934],[-0.1879,0.6768,0.2762],[-0.1017,0.4695,0.49],[-0.1543,0.7556,0.2433],[-0.0909,0.7971,0.2664],[-0.068,0.7447,0.1415],[-0.0011,0.3275,0.3821],[-0.0593,0.1142,0.4709],[-0.0439,0.2353,0.4892],[-0.0461,0.1695,0.3445],[-0.0177,0.711,0.1638],[-0.0884,0.5404,0.1435],[-0.0674,0.4843,0.3097],[-0.0246,0.4878,0.2843],[-0.0901,0.3638,0.2188],[-0.1111,0.5697,0.0973],[-0.1006,0.3614,0.2137],[-0.1272,0.5575,0.0814],[-0.0353,0.4856,0.1752],[0.0043,0.4716,0.0522],[-0.0171,0.4198,0.0734],[-0.0667,0.2582,0.2488],[-0.0318,0.3607,0.1126],[-0.0048,0.2052,0.0589],[-0.0048,0.0305,0.0524],[-0.0862,0.0878,0.2813],[-0.0322,-0.0332,0.399],[-0.0152,0.0735,0.3373],[-0.138,-0.1156,0.2599],[-0.0054,0.0471,0.0956],[0.0027,-0.0577,0.139],[-0.0529,0.1039,0.2998],[-0.0013,0.0248,0.2097],[0.0073,-0.1424,0.2295],[-0.0243,-0.1098,0.1286],[-0.0625,-0.2028,0.2455],[-0.0219,-0.2334,0.1418],[-0.0445,-0.3601,0.179],[-0.0063,-0.4397,0.081],[-0.1407,-0.447,0.0601],[-0.1103,-0.3027,0.2504],[-0.1626,-0.4674,0.163],[-0.0907,-0.4803,0.1209],[-0.0997,-0.5824,0.1326],[-0.1175,-0.2352,0.3798],[-0.0076,-0.1067,0.4546],[-0.1483,-0.1908,0.343],[-0.0726,-0.3781,0.5513],[-0.1635,-0.5848,0.1531],[-0.029,-0.5904,0.3487],[-0.0367,-0.3732,0.4146],[-0.0007,-0.4848,0.4181],[-0.13,-0.4645,0.5006],[-0.1323,-0.614,0.2657],[-0.1488,-0.6277,0.4253],[-0.2215,-0.6735,0.2606],[-0.2789,-0.6995,0.2605],[-0.2961,-0.5936,0.189],[-0.0197,-0.4549,-0.0072],[-0.0432,-0.5923,0.0157],[-0.0257,-0.4622,0.0674],[-0.2008,-0.6164,-0.0478],[-0.1071,-0.6198,0.1925],[-0.1102,-0.7381,0.1828],[-0.2682,-0.7064,0.161],[-0.2046,-0.7845,0.1911],[-0.2566,-0.7723,0.123],[-0.1379,-0.7166,-0.1232],[-0.0483,-0.8016,-0.0928],[-0.0369,-0.7593,0.225],[-0.0133,-0.8308,0.0548],[-0.1467,-0.896,-0.0165],[-0.1363,-0.8265,-0.1754],[-0.1742,-0.8413,-0.1007],[-0.0743,-0.8717,-0.2513],[-0.2372,-0.8909,-0.2231],[-0.2213,-0.6713,-0.3187],[-0.3705,-0.7635,-0.3373],[-0.3189,-0.8419,-0.1181],[-0.4219,-0.7309,-0.1678],[-0.4398,-0.696,-0.1283],[-0.6332,-0.6082,-0.0755],[-0.3946,-0.7309,0.1337],[-0.3341,-0.6126,0.1412],[-0.2538,-0.6964,0.1439],[-0.4435,-0.6302,0.1659],[-0.521,-0.5219,-0.016],[-0.3874,-0.7378,-0.077],[-0.3409,-0.7802,-0.0049],[-0.4869,-0.7164,0.0328],[-0.5408,-0.6325,0.1068],[-0.4803,-0.526,0.038],[-0.5721,-0.5043,0.1746],[-0.6654,-0.504,-0.0002],[-0.676,-0.4813,-0.0204],[-0.5598,-0.3204,-0.0031],[-0.691,-0.0434,-0.4788],[-0.4569,-0.2821,-0.3331],[-0.6945,-0.1249,-0.4782],[-0.7481,-0.0722,-0.3345],[-0.523,-0.3968,-0.3346],[-0.4765,-0.5505,-0.3004],[-0.4231,-0.6399,-0.2355],[-0.4551,-0.6608,-0.2854],[-0.4772,-0.6167,-0.1734],[-0.6135,-0.3078,-0.2341],[-0.5341,-0.3833,-0.3873],[-0.4326,-0.4098,-0.2441],[-0.476,-0.4104,-0.1904],[-0.4868,-0.442,-0.1416],[-0.6087,-0.2282,-0.2481],[-0.4586,-0.4934,-0.0941],[-0.6367,-0.3553,-0.1286],[-0.6047,-0.2621,-0.0843],[-0.5634,0.1125,-0.5509],[-0.3687,0.0284,-0.6725],[-0.3996,-0.0365,-0.4766],[-0.4171,0.0342,-0.5247],[-0.4878,-0.1146,-0.4696],[-0.1787,-0.0024,-0.3862],[-0.378,-0.084,-0.3135],[-0.1899,-0.1247,-0.4303],[-0.1634,-0.1435,-0.3296],[-0.3285,-0.2655,-0.2503],[-0.3706,-0.286,-0.3911],[-0.2893,-0.0364,-0.5426],[-0.3489,-0.1369,-0.4952],[-0.2658,-0.3252,-0.2686],[-0.4914,-0.3473,-0.4366],[-0.4304,-0.5646,-0.3676],[-0.3312,-0.5057,-0.2395],[-0.3698,-0.5059,-0.3608],[-0.2691,-0.6118,-0.2248],[-0.2179,-0.1926,-0.2181],[-0.1938,-0.2268,-0.1563],[-0.0992,-0.2405,-0.2556],[-0.1223,-0.2073,-0.2797],[-0.1818,-0.3019,-0.2849],[-0.1135,-0.3868,-0.1217],[-0.1361,-0.4324,-0.062],[-0.2979,-0.4323,-0.0723],[-0.2018,-0.5182,-0.035],[-0.2241,-0.625,-0.0605],[-0.2521,-0.3859,-0.2096],[-0.0782,-0.3062,-0.1738],[-0.1559,-0.423,-0.2],[-0.0844,-0.5743,-0.1465],[-0.2213,-0.413,-0.2733],[-0.2471,-0.5574,-0.2121],[-0.0199,-0.7209,-0.1988],[-0.1251,-0.6312,-0.2107],[-0.2512,-0.6995,-0.2011],[-0.2259,-0.1088,-0.2631],[0.0115,0.1699,-0.2641],[-0.1124,-0.113,-0.2219],[-0.1809,-0.2197,-0.1568],[-0.0054,0.2738,-0.2152],[-0.0051,0.2646,-0.1259],[-0.0049,0.4219,-0.028],[-0.0047,0.2776,-0.0546],[-0.005,0.2025,0.0177],[-0.0365,-0.1276,-0.1719],[-0.0069,0.0959,-0.2515],[-0.0053,-0.1188,-0.0778],[-0.0052,0.0689,-0.1351],[-0.0047,-0.0514,-0.0249],[-0.0461,-0.2743,-0.0852],[-0.005,-0.1724,0.0176],[-0.0051,-0.2083,-0.0209],[0.0021,-0.3261,0.0246],[0.6405,0.1765,0.1555],[0.1625,-0.5699,0.3515],[0.7104,-0.2229,0.0518],[0.0728,0.1606,-0.3235],[0.6532,0.0222,0.3455],[0.2524,-0.018,0.5002],[0.1169,-0.4803,0.0045],[0.318,-0.244,-0.3086],[0.4621,0.0759,-0.2478],[0.3931,0.4015,-0.113],[0.4238,0.1792,-0.3743],[0.2771,0.1831,-0.4093],[0.0452,0.562,-0.2218],[0.0576,0.787,-0.2356],[0.254,0.7257,0.0335],[0.5086,0.3584,-0.1042],[0.4396,0.2297,0.4607],[0.6623,0.0264,0.1543],[0.4633,-0.4865,0.1837],[0.3101,-0.3622,0.3819],[0.3295,0.3787,0.3522],[0.0703,0.0218,0.527],[0.0717,0.383,0.1885],[0.0276,-0.1735,0.2227],[0.1408,-0.511,0.2168],[0.1978,-0.7311,0.1434],[0.582,-0.6279,-0.1772],[0.6943,-0.1719,-0.4329],[0.6237,-0.3839,-0.0163],[0.3436,-0.5175,-0.2662],[0.1091,-0.4413,-0.0809],[-0.0054,-0.123,-0.0783],[0.3828,-0.0373,-0.0563],[0.688,0.1262,-0.2069],[0.528,-0.1655,0.0546],[0.5905,-0.0485,-0.2774],[0.4931,-0.2242,-0.0774],[0.3552,0.4578,-0.1323],[0.3889,0.6039,-0.268],[0.4581,0.1115,-0.2593],[0.3522,0.3679,-0.275],[0.4856,0.2388,-0.4549],[0.337,0.3214,-0.6812],[0.2434,0.4956,-0.393],[0.2975,0.2845,-0.4654],[0.2027,0.1212,-0.4627],[0.3133,-0.0171,-0.364],[0.0877,0.5947,-0.4644],[-0.0049,0.4284,-0.1319],[0.0038,0.5584,-0.3722],[0.1598,0.1752,-0.3343],[0.0869,0.624,-0.1551],[0.1128,0.7355,0.0155],[0.2102,0.8095,-0.2695],[0.1413,0.9548,-0.0358],[0.2871,0.841,0.031],[0.2762,0.5868,0.0824],[0.2986,0.7409,-0.1557],[0.507,0.6409,-0.2377],[0.4959,0.692,-0.0761],[0.5955,0.4773,0.0133],[0.4697,0.5267,0.2332],[0.6425,0.2897,-0.0011],[0.4855,0.3629,0.2158],[0.5121,0.2449,0.391],[0.4218,-0.002,0.2247],[0.5853,0.064,0.2937],[0.5116,0.1114,-0.115],[0.5631,0.0635,0.1023],[0.5251,-0.2882,0.2253],[0.5315,-0.1214,0.2982],[0.416,-0.2046,0.3643],[0.545,-0.4852,0.268],[0.4198,-0.3994,0.2883],[0.4347,-0.7076,0.2339],[0.3888,-0.107,0.3857],[0.447,-0.3305,0.5013],[0.2076,-0.5893,0.4763],[0.2899,-0.373,0.5527],[0.0113,-0.1783,0.6017],[0.3349,0.301,0.3068],[0.2979,0.1552,0.3907],[0.3453,0.4122,0.4108],[0.2285,-0.0191,0.5268],[0.1307,0.086,0.5739],[0.0793,0.6646,0.3566],[0.0545,0.2847,0.4246],[0.1338,0.403,0.4794],[0.1001,0.4269,0.1551],[-0.0101,0.406,0.0702],[-0.0052,0.0662,0.113],[0.072,-0.08,0.3273],[0.0372,0.0995,0.1885],[0.1153,-0.3488,0.216],[0.117,-0.3599,0.23],[0.1451,-0.1954,0.3144],[0.1089,-0.4745,0.4641],[0.0151,-0.4541,0.4278],[0.1645,-0.6024,0.3702],[0.0916,-0.575,-0.0177],[0.2633,-0.6519,0.1298],[0.1537,-0.7538,-0.0859],[0.1261,-0.8074,-0.0902],[0.2391,-0.7173,-0.2444],[0.4454,-0.7442,-0.1597],[0.3482,-0.7354,0.0515],[0.2934,-0.7306,-0.0865],[0.4885,-0.438,0.0917],[0.6014,0.0664,-0.4931],[0.5728,-0.1447,-0.2514],[0.4537,-0.5403,-0.1751],[0.5246,-0.4791,-0.2625],[0.6112,-0.3673,-0.0898],[0.4175,0.0102,-0.4615],[0.3721,-0.1034,-0.3115],[0.3874,-0.2332,-0.4519],[0.4319,-0.3791,-0.4411],[0.3624,-0.6532,-0.3589],[0.1313,-0.2717,-0.288],[0.2402,-0.4958,-0.0857],[0.1762,-0.3483,-0.1799],[0.0463,-0.6938,-0.2501],[0.017,0.0928,-0.3225],[-0.0051,0.2685,-0.1237],[0.0872,-0.205,-0.124],[-0.0047,-0.0661,-0.0152],[0.0386,-0.3662,0.0023],[0.4385,0.1618,-0.0764],[0.42,0.0134,-0.2219],[0.3964,-0.0128,0.0101],[0.453,-0.0066,0.0102],[0.4522,-0.1535,0.0498],[0.6073,0.1554,-0.1489],[0.6026,0.2768,-0.4941],[0.6271,0.1205,-0.321],[0.7121,0.0544,-0.32],[0.515,-0.0499,-0.2972],[0.4999,-0.1014,-0.028],[0.4954,0.0647,-0.1382],[0.4794,-0.0989,-0.0881],[0.6081,-0.1373,-0.2399],[0.6568,-0.1298,0.0281],[0.6097,-0.2621,0.0048],[0.4865,-0.2209,-0.1886],[0.4897,-0.2207,-0.0755],[0.5019,-0.2578,-0.1139],[0.4425,0.2413,-0.0996],[0.4753,0.4582,-0.0913],[0.3387,0.4233,-0.0592],[0.3737,0.3393,-0.0668],[0.446,0.0809,-0.1378],[0.4589,0.5357,-0.3528],[0.3776,0.626,-0.2673],[0.2782,0.5446,-0.2704],[0.4081,0.5149,-0.2741],[0.3288,0.3783,-0.2747],[0.4127,0.2638,-0.1548],[0.3712,0.4387,-0.1218],[0.4251,0.1977,-0.2841],[0.3413,0.4385,-0.1987],[0.404,0.2392,-0.3374],[0.4694,0.1401,-0.3081],[0.4322,0.2597,-0.3905],[0.4275,0.1729,-0.3653],[0.5246,0.2536,-0.416],[0.4873,0.3314,-0.5091],[0.4522,0.1915,-0.6253],[0.3539,0.2746,-0.4438],[0.2964,0.3356,-0.6854],[0.1794,0.2652,-0.6112],[0.316,0.3431,-0.3563],[0.2619,0.5069,-0.2975],[0.2053,0.5674,-0.3862],[0.2295,0.4516,-0.3327],[0.1326,0.356,-0.3396],[0.2453,0.3039,-0.5083],[0.3542,0.2632,-0.4232],[0.283,0.1867,-0.4112],[0.2527,0.2782,-0.3849],[0.1787,0.3155,-0.3519],[0.2316,0.1137,-0.4722],[0.1507,0.3098,-0.3833],[0.3207,0.0873,-0.4319],[0.332,0.0167,-0.4042],[0.3321,-0.0932,-0.3119],[0.2033,0.6199,-0.3789],[0.0549,0.7169,-0.4077],[0.1302,0.764,-0.4049],[0.112,0.5696,-0.3952],[0.1241,0.6793,-0.2393],[0.0441,0.5808,-0.2963],[0.0012,0.5596,-0.1251],[0.0556,0.5752,-0.2104],[-0.0119,0.4466,-0.2263],[0.1218,0.3969,-0.3534],[0.037,0.3207,-0.385],[0.0184,0.5222,-0.3332],[0.0254,0.4737,-0.4103],[0.0102,0.2998,-0.269],[0.0754,0.2451,-0.3609],[-0.0025,0.2514,-0.2558],[0.1388,0.1821,-0.3334],[0.1194,0.0574,-0.3448],[0.2413,-0.04,-0.3125],[0.1035,0.6209,-0.0495],[0.1176,0.7467,-0.2126],[0.0837,0.6222,-0.1297],[0.0795,0.7231,0.0415],[0.0683,0.7187,0.0987],[0.0743,0.9063,-0.2356],[0.2309,0.7566,-0.3406],[0.1445,0.8126,-0.3169],[0.2496,0.7854,-0.1858],[0.0921,0.7854,0.048],[0.122,0.8966,0.0068],[0.0634,0.8501,-0.1547],[0.0732,0.9282,-0.0679],[0.2545,0.8706,-0.0948],[0.12,0.8475,0.089],[0.2826,0.8889,0.019],[0.1657,0.8358,0.1978],[0.2891,0.7532,0.0956],[0.2426,0.6969,0.1395],[0.2524,0.5569,0.1065],[0.2715,0.7429,-0.0792],[0.3122,0.6576,0.1329],[0.3434,0.6069,0.1956],[0.4447,0.6174,-0.0001],[0.3313,0.7297,-0.1745],[0.3772,0.6486,-0.3313],[0.311,0.8187,-0.1999],[0.4639,0.623,-0.1887],[0.3719,0.546,0.0339],[0.4336,0.6033,-0.0293],[0.4987,0.7121,-0.0996],[0.4445,0.7099,-0.0331],[0.5432,0.6383,-0.1571],[0.4436,0.55,0.0237],[0.5973,0.5501,-0.0637],[0.5549,0.4426,-0.0042],[0.5877,0.3825,-0.0118],[0.5169,0.366,-0.1994],[0.3276,0.541,0.1485],[0.4409,0.5703,0.1638],[0.3401,0.5322,0.1396],[0.3461,0.4652,0.3511],[0.4776,0.4795,0.0458],[0.5537,0.2728,0.1664],[0.6545,0.296,-0.1159],[0.5957,0.2843,-0.0103],[0.6226,0.2373,-0.0686],[0.55,0.3391,0.3276],[0.4193,0.171,0.258],[0.5519,0.3917,0.1824],[0.3952,0.3908,0.1493],[0.3914,0.2481,0.1562],[0.4274,0.2209,0.4011],[0.5594,0.2245,0.2637],[0.5247,0.164,0.4624],[0.5072,0.0287,0.2526],[0.4361,-0.0155,0.3288],[0.438,-0.0174,0.3202],[0.5432,0.121,0.1397],[0.6094,0.081,0.3394],[0.6209,-0.0233,0.3522],[0.5965,-0.1958,0.283],[0.6265,0.106,-0.0135],[0.5818,0.1245,-0.1051],[0.6894,0.1253,-0.1166],[0.5058,-0.0336,-0.0518],[0.6722,-0.2313,0.3068],[0.6643,0.0741,0.2243],[0.711,0.0648,0.1372],[0.5453,-0.0721,0.1606],[0.5634,-0.0571,0.0738],[0.5985,-0.2915,0.2038],[0.6187,-0.1772,0.0798],[0.489,-0.2596,0.1522],[0.4821,-0.2834,0.1217],[0.5367,-0.3192,0.0594],[0.5324,-0.1996,0.4352],[0.4826,-0.1548,0.2798],[0.5208,-0.1062,0.2656],[0.3758,-0.2061,0.255],[0.5496,-0.3084,0.3239],[0.5802,-0.382,0.2445],[0.6441,-0.486,0.062],[0.5606,-0.431,0.1694],[0.4674,-0.4845,0.1704],[0.4278,-0.4247,0.4473],[0.4034,-0.3114,0.2547],[0.5237,-0.3812,0.2318],[0.5585,-0.4589,0.366],[0.4586,-0.5254,0.3142],[0.3341,-0.3645,0.3781],[0.5372,-0.6044,0.2387],[0.276,-0.4594,0.2567],[0.2755,-0.4548,0.2501],[0.328,-0.5972,0.1393],[0.4507,-0.1378,0.4451],[0.2987,-0.2431,0.429],[0.4518,-0.1469,0.5338],[0.3177,-0.1047,0.3904],[0.2286,-0.1469,0.4663],[0.389,-0.3936,0.4953],[0.2636,-0.4891,0.2588],[0.2696,-0.4119,0.3279],[0.2434,-0.5892,0.3992],[0.2062,-0.1817,0.505],[0.1598,-0.1854,0.6436],[0.3354,-0.3286,0.6043],[0.206,-0.3265,0.5542],[0.1893,-0.4372,0.646],[0.079,-0.2333,0.611],[0.0825,-0.3125,0.64],[0.1017,-0.0558,0.6791],[0.0193,-0.2902,0.518],[0.0168,-0.1164,0.5006],[0.2889,0.6006,0.3259],[0.418,0.3292,0.3293],[0.1935,0.5377,0.3004],[0.1738,0.5747,0.3242],[0.3029,0.487,0.4466],[0.3064,0.1617,0.4456],[0.4646,-0.0944,0.3635],[0.4468,0.1292,0.4273],[0.2546,-0.016,0.4989],[0.3057,0.4129,0.4872],[0.2764,0.217,0.5895],[0.2922,0.1639,0.3323],[0.2596,0.2371,0.369],[0.2709,-0.0032,0.4749],[0.2236,0.2522,0.6009],[0.2706,0.0706,0.5966],[0.1642,0.174,0.5625],[0.0622,0.2178,0.5392],[0.0752,0.031,0.5311],[0.2333,0.7259,0.233],[0.1487,0.6072,0.4327],[0.1677,0.7028,0.3369],[0.0083,0.6648,0.3257],[0.166,0.4091,0.5308],[0.0589,0.2094,0.5303],[0.0257,0.0679,0.4406],[0.0332,0.2579,0.4187],[0.1101,0.186,0.348],[0.0746,0.5973,0.2366],[0.0202,0.4867,0.4442],[0.0688,0.4656,0.2757],[0.0932,0.3863,0.356],[0.1081,0.3515,0.2787],[0.0702,0.6586,0.1525],[0.0954,0.3499,0.2315],[0.0778,0.5227,0.1406],[0.099,0.5879,0.0211],[0.0352,0.4606,0.0582],[-0.0059,0.3653,0.0877],[0.0182,0.2736,0.1927],[0.0261,0.2697,0.1564],[-0.0041,0.1451,0.169],[0.0075,0.183,0.3395],[0.0403,0.0845,0.4136],[0.1245,-0.082,0.3507],[0.0725,-0.0799,0.3307],[0.0562,-0.1206,0.3873],[0.0525,0.1594,0.1847],[0.0444,0.1704,0.1843],[0.0176,-0.0882,0.1546],[0.0384,0.042,0.3199],[0.0895,-0.2528,0.2598],[0.0084,-0.1747,0.1496],[0.0428,-0.3455,0.2109],[0.0865,-0.2756,0.1207],[0.0215,-0.3327,0.0716],[0.0704,-0.4857,0.0315],[0.1891,-0.4149,0.1085],[0.0303,-0.4346,0.2641],[0.0031,-0.5002,0.153],[0.1149,-0.4965,0.1224],[0.0979,-0.2167,0.3479],[0.08,-0.2885,0.433],[0.1332,-0.2384,0.4018],[0.1726,-0.3182,0.3855],[0.0621,-0.4633,0.4781],[0.1241,-0.5239,0.2243],[0.0298,-0.4911,0.2754],[0.0986,-0.5199,0.3076],[0.0107,-0.4026,0.3874],[0.1143,-0.433,0.4008],[0.2056,-0.6453,0.2564],[0.0733,-0.6193,0.411],[0.105,-0.6286,0.3021],[0.2644,-0.6529,0.3903],[0.1824,-0.4303,0.0368],[0.1463,-0.5334,-0.0429],[0.0202,-0.5999,0.0783],[0.0702,-0.4856,-0.03],[0.0757,-0.7025,0.0351],[0.1226,-0.7198,0.3585],[0.2688,-0.7192,0.2227],[0.1932,-0.6979,0.1309],[0.2388,-0.844,0.1338],[0.2686,-0.8072,0.0859],[0.0091,-0.7244,-0.0092],[-0.0036,-0.7554,0.1248],[0.0821,-0.848,-0.1012],[0.1333,-0.847,-0.0477],[0.2571,-0.869,0.0437],[0.0912,-0.8389,-0.1802],[0.2386,-0.9075,-0.1126],[0.0957,-0.8347,-0.1913],[0.2015,-0.7108,-0.2257],[0.2945,-0.8275,-0.3116],[0.4228,-0.7855,-0.272],[0.3223,-0.8474,-0.0694],[0.3298,-0.8329,-0.1615],[0.4238,-0.7669,-0.0862],[0.3983,-0.7634,-0.0293],[0.3402,-0.7042,-0.0114],[0.3103,-0.6062,0.0754],[0.3564,-0.6485,0.0856],[0.4412,-0.6822,0.0962],[0.4246,-0.6574,-0.0834],[0.3428,-0.6655,-0.114],[0.4428,-0.5524,0.0158],[0.4697,-0.5261,0.0467],[0.5895,-0.5778,0.1144],[0.4507,-0.4567,-0.0488],[0.4223,-0.441,0.1035],[0.4259,-0.4112,0.0304],[0.5074,-0.4321,0.0117],[0.6458,0.1655,-0.5214],[0.6271,-0.1333,-0.4864],[0.6002,-0.1515,-0.3684],[0.6983,-0.0836,-0.4467],[0.7601,-0.1727,-0.2502],[0.5544,-0.4672,-0.3763],[0.4833,-0.579,-0.323],[0.4319,-0.6789,-0.2557],[0.5724,-0.6355,-0.2439],[0.4615,-0.564,-0.1474],[0.6777,-0.3156,-0.3319],[0.4476,-0.2413,-0.3481],[0.6248,-0.3913,-0.2395],[0.6339,-0.3898,-0.238],[0.5227,-0.5808,-0.1071],[0.5521,-0.2769,-0.1238],[0.5718,-0.4578,-0.1326],[0.6603,-0.4687,-0.0312],[0.5991,-0.3815,-0.0139],[0.5103,0.1168,-0.6249],[0.2479,0.0542,-0.6427],[0.5381,-0.0209,-0.5794],[0.4179,-0.0229,-0.4418],[0.4579,-0.1642,-0.4615],[0.2127,-0.0511,-0.4938],[0.3516,-0.146,-0.2797],[0.1897,-0.0423,-0.374],[0.3219,-0.2053,-0.3342],[0.4869,-0.2482,-0.3899],[0.3684,-0.2885,-0.4298],[0.3707,-0.0415,-0.5345],[0.2488,-0.1919,-0.3594],[0.3298,-0.1894,-0.3433],[0.3894,-0.3797,-0.3953],[0.3449,-0.4816,-0.2777],[0.4748,-0.5769,-0.321],[0.3055,-0.5478,-0.2592],[0.387,-0.6494,-0.3512],[0.3472,-0.1678,-0.2626],[0.1067,-0.2404,-0.1398],[0.1754,-0.1534,-0.2497],[0.1361,-0.2015,-0.321],[0.2227,-0.3196,-0.2787],[0.1802,-0.3863,-0.1379],[0.1564,-0.4461,0.021],[0.2416,-0.4042,-0.1148],[0.1618,-0.5207,-0.057],[0.2094,-0.4219,-0.2795],[0.1908,-0.5159,-0.1732],[0.1889,-0.3556,-0.171],[0.1713,-0.5176,-0.1594],[0.0591,-0.5338,-0.0393],[0.0947,-0.5496,-0.2207],[0.0489,-0.6627,-0.2107],[0.1693,-0.6144,-0.212],[0.248,-0.6169,-0.2224],[0.2549,-0.7357,-0.3587],[0.2105,-0.0999,-0.2706],[0.0062,0.0586,-0.3187],[0.1149,-0.1327,-0.2536],[0.0982,-0.1522,-0.18],[-0.0041,0.3114,-0.1754],[-0.0049,0.451,-0.0877]];
+
+async function genNeurons() {
+  const raw = BRAIN_RAW;
+  const out = [];
+  for (const [x, y, z] of raw) {
+    const ox =  x * BR, oy =  z * BR, oz = -y * BR;
+    const hemi   = ox >= 0 ? 0 : 4;
+    const angIdx = Math.floor(((Math.atan2(oy, oz) + Math.PI) / (Math.PI * 2)) * 4);
+    const secIdx = (hemi + angIdx) % 8;
+    out.push({ ox:ox+(Math.random()-.5)*3, oy:oy+(Math.random()-.5)*3, oz:oz+(Math.random()-.5)*3,
+               rx:0,ry:0,rz:0,sx:0,sy:0,depth:0,fireAlpha:0,fireColor:[255,255,255],secIdx,connIdx:[] });
+  }
+  const STEM_TOP_Y=-BR*0.62, STEM_BOT_Y=-BR*0.792, CORD_BOT_Y=-BR*1.092;
+  for (let k=0;k<90;k++) {
+    const t=k/90, oy=STEM_TOP_Y+(STEM_BOT_Y-STEM_TOP_Y)*t, r=BR*(0.28-t*0.16);
+    const ang=Math.random()*Math.PI*2, rr=r*Math.sqrt(Math.random());
+    out.push({ ox:Math.cos(ang)*rr*.75+(Math.random()-.5)*2, oy:oy+(Math.random()-.5)*4, oz:Math.sin(ang)*rr+(Math.random()-.5)*2,
+               rx:0,ry:0,rz:0,sx:0,sy:0,depth:0,fireAlpha:0,fireColor:[255,255,255],secIdx:(k%2===0)?1:2,connIdx:[] });
+  }
+  for (let k=0;k<30;k++) {
+    const t=k/30, oy=STEM_BOT_Y+(CORD_BOT_Y-STEM_BOT_Y)*t, r=BR*(0.10-t*0.06);
+    const ang=Math.random()*Math.PI*2, rr=r*Math.sqrt(Math.random());
+    out.push({ ox:Math.cos(ang)*rr*.6+(Math.random()-.5)*1.5, oy:oy+(Math.random()-.5)*3, oz:Math.sin(ang)*rr+(Math.random()-.5)*1.5,
+               rx:0,ry:0,rz:0,sx:0,sy:0,depth:0,fireAlpha:0,fireColor:[255,255,255],secIdx:0,connIdx:[] });
+  }
+  return out;
+}
+
+function genSynapses(nrns) {
+  const syns = [];
+  const cd2  = CDIST * CDIST;
+  for (let i = 0; i < nrns.length; i++) {
+    const a = nrns[i];
+    let cnt = 0;
+    for (let j = i + 1; j < nrns.length && cnt < MCONN; j++) {
+      const b  = nrns[j];
+      const dx = a.ox-b.ox, dy = a.oy-b.oy, dz = a.oz-b.oz;
+      if (dx*dx + dy*dy + dz*dz < cd2) {
+        const si = syns.length;
+        syns.push({ a:i, b:j, pulses:[] });
+        a.connIdx.push(si);
+        b.connIdx.push(si);
+        cnt++;
+      }
+    }
+  }
+  return syns;
+}
+
+// ─── BrainLoader ─────────────────────────────────────────────────────────────
+class BrainLoader {
+  constructor(structured) {
+    this.overlay   = document.getElementById('brainOverlay');
+    this.canvas    = document.getElementById('brainCanvas');
+    this.ctx       = this.canvas.getContext('2d');
+    this.structured = structured;
+    this._resize();
+    window.addEventListener('resize', () => this._resize());
+
+    this.neurons  = [];
+    this.synapses = [];
+
+    this.angleY = 0;
+    this.time   = 0;
+
+    this.queue     = [];
+    this.queueIdx  = 0;
+    this.lastRel   = 0;
+    this.memCount  = 0;
+    this.totalMem  = 0;
+    this.curSec    = '';
+    this.curSecIdx = -1;
+    // State
+    this.saveComplete = false;
+    this.fading       = false;
+    this.fadeAlpha    = 1;
+    this._resolve     = null;
+
+    // Ambient fire timer
+    this.lastAmbient = 0;
+
+    // Build queue from structured data
+    SECTIONS.forEach((k, si) => {
+      const bullets = Array.isArray(this.structured[k])
+        ? this.structured[k]
+        : (this.structured[k] || '').split('\n').map(l => l.replace(/^[-•*\d.)\s]+/,'').trim()).filter(l=>l.length>8);
+      bullets.forEach(txt => { this.queue.push({ txt, si }); this.totalMem++; });
+    });
+    // Dynamically cap animation time to ~25s: min 20ms, max 110ms per memory
+    this._memMs = this.totalMem > 0 ? Math.max(20, Math.min(110, Math.floor(25000 / this.totalMem))) : 110;
+  }
+
+  _resize() {
+    this.W = this.canvas.width  = window.innerWidth;
+    this.H = this.canvas.height = window.innerHeight;
+    this.cx = this.W / 2;
+    this.cy = this.H / 2 + 10;
+  }
+
+  // ─── Fire a neuron + cascade ────────────────────────────────────────────────
+  _fire(idx, strength = 1.0, hop = 0, secIdx = -1) {
+    if (hop > 3) return;
+    const n = this.neurons[idx];
+    if (!n) return;
+    if (n.fireAlpha > 0.4 && hop > 0) return;
+    n.fireAlpha = Math.max(n.fireAlpha, strength);
+    if (secIdx >= 0) n.fireColor = SEC_COLOR[secIdx % SEC_COLOR.length];
+    else n.fireColor = [255, 255, 255];
+
+    // Spawn traveling pulse on each connected synapse
+    for (const si of n.connIdx) {
+      const syn = this.synapses[si];
+      if (!syn) continue;
+      const fromA = syn.a === idx;
+      syn.pulses.push({
+        pos: 0,
+        dir: fromA ? 1 : -1,
+        alpha: strength * 0.9,
+        secIdx: secIdx >= 0 ? secIdx : n.secIdx,
+      });
+      // Cascade to neighbor
+      const neighborIdx = fromA ? syn.b : syn.a;
+      const delay = 55 + Math.random() * 50;
+      setTimeout(() => this._fire(neighborIdx, strength * 0.48, hop + 1, secIdx), delay);
+    }
+  }
+
+  // ─── Find nearest neuron to a screen position ───────────────────────────────
+  _nearestNeuron(sx, sy, secIdx = -1) {
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < this.neurons.length; i++) {
+      const n = this.neurons[i];
+      if (n.rz < -BR * 0.3) continue; // skip back-facing
+      if (secIdx >= 0 && Math.random() > 0.5 && n.secIdx !== secIdx) continue;
+      const dx = n.sx - sx, dy = n.sy - sy;
+      const d = dx*dx + dy*dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  async start() {
+    this.overlay.style.display = 'block';
+
+    // Show loading state while fetching brain mesh
+    this._drawLoading('LOADING BRAIN MESH…');
+    this.neurons  = await genNeurons();
+    this.synapses = genSynapses(this.neurons);
+
+    requestAnimationFrame(() => this._frame());
+    return new Promise(res => {
+      this._resolve = res;
+      // Safety: force-resolve after 45s so the flow never hangs
+      setTimeout(() => { this.overlay.style.display = 'none'; res(); }, 45000);
+    });
+  }
+
+  _drawLoading(msg) {
+    const { ctx, W, H, cx, cy } = this;
+    ctx.fillStyle = '#060606'; ctx.fillRect(0,0,W,H);
+    ctx.font = '700 9px "Instrument Sans",sans-serif';
+    ctx.fillStyle = 'rgba(50,50,50,1)';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(msg, cx, cy);
+  }
+
+  notifySaveComplete() {
+    this.saveComplete = true;
+    this._checkDone();
+  }
+
+  _checkDone() {
+    if (this.saveComplete && this.queueIdx >= this.queue.length &&
+        this.particles.length === 0 && !this.fading) {
+      this.fading = true;
+      this._triggerFinalBurst();
+      setTimeout(() => this._fadeOut(), 2400);
+    }
+  }
+
+  _triggerFinalBurst() {
+    // Fire neurons in waves across all sections
+    let delay = 0;
+    for (let pass = 0; pass < 3; pass++) {
+      const subset = [...this.neurons].sort(() => Math.random() - 0.5).slice(0, 60);
+      subset.forEach(n => {
+        const ni = this.neurons.indexOf(n);
+        setTimeout(() => this._fire(ni, 0.7 + Math.random() * 0.3, 0, n.secIdx), delay + Math.random() * 400);
+      });
+      delay += 500;
+    }
+  }
+
+  _fadeOut() {
+    const step = () => {
+      this.fadeAlpha = Math.max(0, this.fadeAlpha - 0.025);
+      if (this.fadeAlpha <= 0) {
+        this.overlay.style.display = 'none';
+        if (this._resolve) this._resolve();
+      } else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  _frame() {
+    if (this.fadeAlpha <= 0) return;
+    try {
+      this._update();
+      this._draw();
+    } catch(e) {
+      console.error('[BrainLoader] frame error:', e);
+      this.overlay.style.display = 'none';
+      if (this._resolve) this._resolve();
+      return;
+    }
+    requestAnimationFrame(() => this._frame());
+  }
+
+  _update() {
+    const now = Date.now();
+    this.time++;
+    this.angleY += RSPD;
+    const angleX = Math.sin(this.time * 0.012) * 0.13;
+
+    const cosY = Math.cos(this.angleY), sinY = Math.sin(this.angleY);
+    const cosX = Math.cos(angleX),      sinX = Math.sin(angleX);
+    const { cx, cy } = this;
+
+    // Rotate + project neurons
+    for (let i = 0; i < this.neurons.length; i++) {
+      const n = this.neurons[i];
+      // Y rotation
+      const rx  =  n.ox * cosY + n.oz * sinY;
+      const ry0 =  n.oy;
+      const rz0 = -n.ox * sinY + n.oz * cosY;
+      // X rotation (wobble)
+      const ry =  ry0 * cosX - rz0 * sinX;
+      const rz =  ry0 * sinX + rz0 * cosX;
+      n.rx = rx; n.ry = ry; n.rz = rz;
+      // Perspective project
+      const s = FOV / (FOV + rz);
+      n.sx    = cx + rx * s;
+      n.sy    = cy - ry * s;
+      n.depth = (rz + BR * 1.6) / (BR * 3.2); // 0 = back, 1 = front
+      // Decay fire
+      if (n.fireAlpha > 0) {
+        n.fireAlpha = Math.max(0, n.fireAlpha - FDECAY);
+      }
+    }
+
+    // Release next memory particle
+    if (this.queueIdx < this.queue.length && now - this.lastRel > this._memMs) {
+      const item = this.queue[this.queueIdx++];
+      this.lastRel = now;
+      this.curSec    = SHORT[SECTIONS[item.si]] || SECTIONS[item.si];
+      this.curSecIdx = item.si;
+
+      // Spawn from random edge position outside brain
+      const spawnAngle = Math.random() * Math.PI * 2;
+      const spawnR     = BR * 1.65 + Math.random() * 80;
+      this.particles.push({
+        x:   cx + Math.cos(spawnAngle) * spawnR,
+        y:   cy + Math.sin(spawnAngle) * spawnR,
+        txt: item.txt,
+        si:  item.si,
+        life: 0,
+        absorbed: false,
+      });
+    }
+
+    // Update text particles
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life++;
+      const dx = cx - p.x, dy = cy - p.y;
+      const d  = Math.sqrt(dx*dx + dy*dy);
+      // Drift toward center
+      const speed = 0.022 + (d / (BR * 2.5)) * 0.018;
+      p.x += dx * speed;
+      p.y += dy * speed;
+      // Absorb when within brain radius
+      if (d < BR * 0.88) {
+        p.absorbed = true;
+        this.memCount++;
+        const ni = this._nearestNeuron(p.x, p.y, p.si);
+        if (ni >= 0) this._fire(ni, 1.0, 0, p.si);
+        this.particles.splice(i, 1);
+        this._checkDone();
+        continue;
+      }
+      if (p.life > 240) { this.particles.splice(i, 1); this._checkDone(); }
+    }
+
+    // Update synapse pulses
+    for (const syn of this.synapses) {
+      for (let i = syn.pulses.length - 1; i >= 0; i--) {
+        const pulse = syn.pulses[i];
+        pulse.pos   += 0.065;
+        pulse.alpha -= 0.013;
+        if (pulse.pos > 1.15 || pulse.alpha <= 0) syn.pulses.splice(i, 1);
+      }
+    }
+
+    // Ambient fire
+    if (now - this.lastAmbient > 2200 + Math.random() * 1800) {
+      this.lastAmbient = now;
+      const ri = Math.floor(Math.random() * this.neurons.length);
+      this._fire(ri, 0.45 + Math.random() * 0.3, 0, -1);
+    }
+  }
+
+  _draw() {
+    const { ctx, W, H, cx, cy, fadeAlpha } = this;
+    ctx.globalAlpha = fadeAlpha;
+
+    // ── Background ──────────────────────────────────────────────
+    ctx.fillStyle = '#060606';
+    ctx.fillRect(0, 0, W, H);
+
+    // Dot grid
+    ctx.fillStyle = 'rgba(20,20,20,1)';
+    for (let x = 14; x < W; x += 28)
+      for (let y = 14; y < H; y += 28) {
+        ctx.beginPath(); ctx.arc(x, y, 0.5, 0, Math.PI*2); ctx.fill();
+      }
+
+    // ── Brain ambient glow ───────────────────────────────────────
+    const ag = ctx.createRadialGradient(cx, cy, 0, cx, cy, BR * 2.5);
+    ag.addColorStop(0,   'rgba(214,48,49,0.12)');
+    ag.addColorStop(0.4, 'rgba(214,48,49,0.05)');
+    ag.addColorStop(0.75,'rgba(214,48,49,0.01)');
+    ag.addColorStop(1,   'rgba(214,48,49,0)');
+    ctx.fillStyle = ag;
+    ctx.beginPath(); ctx.arc(cx, cy, BR*2.2, 0, Math.PI*2); ctx.fill();
+
+    // ── Draw resting synapses (dim web) ───────────────────────────
+    ctx.lineWidth = 0.75;
+    for (const syn of this.synapses) {
+      const na = this.neurons[syn.a], nb = this.neurons[syn.b];
+      const avgD = (na.depth + nb.depth) * 0.5;
+      if (avgD < 0.18) continue; // skip back-facing
+      const alpha = (avgD - 0.18) * 0.72;
+      ctx.beginPath();
+      ctx.moveTo(na.sx, na.sy);
+      ctx.lineTo(nb.sx, nb.sy);
+      ctx.strokeStyle = `rgba(200,55,55,${alpha})`;
+      ctx.stroke();
+    }
+
+    // ── Draw synapse pulses (traveling signals) ───────────────────
+    for (const syn of this.synapses) {
+      if (!syn.pulses.length) continue;
+      const na = this.neurons[syn.a], nb = this.neurons[syn.b];
+      if ((na.depth + nb.depth) * 0.5 < 0.3) continue;
+
+      for (const pulse of syn.pulses) {
+        if (pulse.alpha <= 0.02) continue;
+        const t0 = Math.max(0, pulse.pos - 0.22);
+        const t1 = Math.min(1, pulse.pos);
+        if (t1 <= t0) continue;
+
+        const [r,g,b] = pulse.secIdx >= 0 ? SEC_COLOR[pulse.secIdx] : [255,140,80];
+
+        // Glow line (thick, transparent)
+        ctx.beginPath();
+        ctx.moveTo(na.sx + (nb.sx-na.sx)*t0, na.sy + (nb.sy-na.sy)*t0);
+        ctx.lineTo(na.sx + (nb.sx-na.sx)*t1, na.sy + (nb.sy-na.sy)*t1);
+        ctx.strokeStyle = `rgba(${r},${g},${b},${pulse.alpha * 0.85})`;
+        ctx.lineWidth = 6.0; ctx.stroke();
+        // Core line (thin, bright)
+        ctx.strokeStyle = `rgba(255,255,255,${pulse.alpha})`;
+        ctx.lineWidth = 1.8; ctx.stroke();
+      }
+    }
+
+    // ── Draw neuron glows (active) ────────────────────────────────
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const n of this.neurons) {
+      if (n.fireAlpha < 0.05 || n.depth < 0.3) continue;
+      const stamp = GLOW_STAMPS[n.secIdx] || AMBIENT_STAMP;
+      const sz    = 48 * n.fireAlpha * (0.80 + n.depth * 0.60);
+      ctx.globalAlpha = fadeAlpha * Math.min(1, n.fireAlpha * 1.1) * (0.55 + n.depth * 0.45);
+      ctx.drawImage(stamp, n.sx - sz/2, n.sy - sz/2, sz, sz);
+    }
+    ctx.globalAlpha = fadeAlpha;
+    ctx.restore();
+
+    // ── Draw neurons (sorted back-to-front) ───────────────────────
+    const sorted = [...this.neurons].sort((a, b) => a.rz - b.rz);
+    for (const n of sorted) {
+      const d     = n.depth;
+      if (d < 0.12) continue;
+      const alpha = 0.35 + d * 0.65;
+      const size  = 1.4 + d * 2.4 + n.fireAlpha * 4.0;
+
+      if (n.fireAlpha > 0.05) {
+        const [r,g,b] = n.fireColor;
+        const fa = n.fireAlpha * (0.6 + d * 0.4);
+        ctx.fillStyle = `rgba(${Math.round(r + (255-r)*n.fireAlpha)},${Math.round(g + (255-g)*n.fireAlpha)},${Math.round(b + (255-b)*n.fireAlpha)},${fa})`;
+      } else {
+        ctx.fillStyle = `rgba(230,75,75,${alpha})`;
+      }
+      ctx.beginPath();
+      ctx.arc(n.sx, n.sy, size, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // ── Draw memory text particles ────────────────────────────────
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.font = '400 9px "Instrument Sans",sans-serif';
+    for (const p of this.particles) {
+      const dx = cx - p.x, dy = cy - p.y;
+      const d  = Math.sqrt(dx*dx + dy*dy);
+      const proximity = Math.min(1, (d - BR * 0.8) / (BR * 0.9));
+      const fa  = Math.min(1, p.life / 14) * proximity;
+      if (fa < 0.02) continue;
+      const [r,g,b] = SEC_COLOR[p.si] || [214,48,49];
+      ctx.globalAlpha = fadeAlpha * fa * 0.65;
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      const label = p.txt.length > 38 ? p.txt.slice(0, 38) + '…' : p.txt;
+      ctx.fillText(label, p.x, p.y);
+    }
+    ctx.globalAlpha = fadeAlpha;
+
+    // ── HUD ───────────────────────────────────────────────────────
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+    // Memory counter below brain
+    ctx.font = '700 10px "Instrument Sans",sans-serif';
+    ctx.fillStyle = 'rgba(70,70,70,1)';
+    ctx.fillText(`${this.memCount} / ${this.totalMem}  MEMORIES`, cx, cy + BR + 52);
+
+    // Progress bar
+    const bw = 140, bh = 1.5, bx = cx - bw/2, by = cy + BR + 67;
+    ctx.fillStyle = 'rgba(22,22,22,1)'; ctx.fillRect(bx, by, bw, bh);
+    const pct = this.totalMem > 0 ? this.memCount / this.totalMem : 0;
+    ctx.fillStyle = 'rgba(214,48,49,0.7)'; ctx.fillRect(bx, by, bw * pct, bh);
+
+    // Blinking section label
+    const blink = Math.sin(Date.now() / 340) > 0 ? 0.9 : 0.2;
+    if (this.curSec) {
+      const [r,g,b] = this.curSecIdx >= 0 ? SEC_COLOR[this.curSecIdx] : [214,48,49];
+      ctx.font = '700 7.5px "Instrument Sans",sans-serif';
+      ctx.fillStyle = `rgba(${r},${g},${b},${blink})`;
+      ctx.fillText(this.curSec, cx, cy + BR + 83);
+    }
+
+    // Top label
+    ctx.font = '700 8px "Instrument Sans",sans-serif';
+    ctx.fillStyle = 'rgba(34,34,34,1)';
+    ctx.fillText('BUILDING NEURAL MEMORY', cx, cy - BR - 52);
+
+    // Neuron / synapse count (subtle debug info)
+    ctx.font = '400 7px "Instrument Sans",sans-serif';
+    ctx.fillStyle = 'rgba(28,28,28,1)';
+    ctx.fillText(`${this.neurons.length} NEURONS  ·  ${this.synapses.length} SYNAPSES`, cx, cy - BR - 38);
+
+    // Completion flash
+    if (this.fading && this.fadeAlpha > 0.2) {
+      const t = Math.min(1, (1 - this.fadeAlpha) * 3.5);
+      ctx.font = '700 14px "Instrument Sans",sans-serif';
+      ctx.fillStyle = `rgba(214,48,49,${t})`;
+      ctx.fillText('MEMORIES ABSORBED', cx, cy);
+      ctx.font = '500 8px "Instrument Sans",sans-serif';
+      ctx.fillStyle = `rgba(100,100,100,${t * 0.7})`;
+      ctx.fillText(`${this.memCount} memories stored permanently`, cx, cy + 20);
+    }
+
+    ctx.globalAlpha = 1;
+  }
+}
+
+window.BrainLoader = BrainLoader;
+_resolveLoader(BrainLoader);
+</script>
+</body>
+</html>

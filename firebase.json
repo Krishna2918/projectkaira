@@ -1,4 +1,7 @@
 {
+  "firestore": {
+    "rules": "firestore.rules"
+  },
   "hosting": {
     "public": ".",
     "ignore": [
@@ -13,6 +16,18 @@
     ],
     "rewrites": [
       {
+        "source": "/dashboard",
+        "destination": "/dashboard.html"
+      },
+      {
+        "source": "/onboarding",
+        "destination": "/onboarding.html"
+      },
+      {
+        "source": "/memory-import",
+        "destination": "/memory-import.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -23,7 +38,20 @@
         "headers": [
           { "key": "X-Content-Type-Options", "value": "nosniff" },
           { "key": "X-Frame-Options", "value": "DENY" },
-          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/dashboard",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/onboarding",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
         ]
       }
     ]

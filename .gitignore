@@ -1,0 +1,27 @@
+# Firebase
+.firebase/
+*.cache
+
+# Playwright
+.playwright-cli/
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Waitlist data & server
+waitlist.json
+waitlist_server.py
+fb_deploy_output.txt
+fb_login_output.txt
+fb_*.txt
+
+# Brain / generated data
+brain_vertices.json
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their own doc
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Votes: anyone authenticated can read, write (increment only — enforced client-side)
+    match /votes/{featureId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Meta/stats: anyone authenticated can read; writes only via server (allow for now)
+    match /meta/{doc} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Chat relay: users can read/write their own chat doc
+    match /chats/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Notes: users can read/write their own notes subcollection
+    match /notes/{uid}/entries/{entryId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Notifications: users can read their own; Ana server writes via Admin SDK (bypasses rules)
+    match /notifications/{uid}/items/{itemId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
